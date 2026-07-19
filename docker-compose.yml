@@ -1,0 +1,84 @@
+name: taskman
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-taskman}
+      POSTGRES_USER: ${POSTGRES_USER:-taskman}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taskman} -d ${POSTGRES_DB:-taskman}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - vault_data:/data/vault
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/readyz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  telegram-worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.integrations.telegram_worker"]
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - vault_data:/data/vault
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      TASKMAN_DOMAIN: ${TASKMAN_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGDATABASE: ${POSTGRES_DB:-taskman}
+      PGUSER: ${POSTGRES_USER:-taskman}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - vault_data:/data/vault:ro
+      - ./backups:/backups
+      - ./infra/backup.sh:/scripts/backup.sh:ro
+    command: ["sh", "/scripts/backup.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  vault_data:
+  caddy_data:
+  caddy_config:

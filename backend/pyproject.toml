@@ -1,0 +1,45 @@
+[project]
+name = "taskman-api"
+version = "0.1.0"
+description = "Global API and integration worker for Taskman"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14,<2",
+  "cryptography>=44,<46",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pwdlib[argon2]>=0.2,<1",
+  "pydantic-settings>=2.7,<3",
+  "pyjwt>=2.10,<3",
+  "python-frontmatter>=1.1,<2",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+taskman-api = "app.main:run"
+taskman-telegram-worker = "app.integrations.telegram_worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

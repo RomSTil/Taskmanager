@@ -1,0 +1,100 @@
+import uuid
+
+from fastapi.testclient import TestClient
+
+
+def test_note_roundtrip_links_and_sync_conflict(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    target = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "Architecture", "path": "Inbox/Architecture.md", "content_markdown": "# Core"},
+    )
+    assert target.status_code == 201, target.text
+    target_note = target.json()
+    source = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={
+            "title": "Daily",
+            "path": "Inbox/Daily.md",
+            "content_markdown": "See [[Architecture]] and ship it.",
+        },
+    )
+    assert source.status_code == 201
+    backlinks = client.get(
+        f"/api/v1/notes/{target_note['id']}/backlinks", headers=auth_headers
+    ).json()
+    assert backlinks[0]["title"] == "Daily"
+    assert client.get("/api/v1/notes", headers=auth_headers, params={"q": "ship"}).json()[0]["title"] == "Daily"
+
+    update = client.patch(
+        f"/api/v1/notes/{target_note['id']}",
+        headers=auth_headers,
+        json={"base_revision": 1, "content_markdown": "# Core\nServer edit"},
+    )
+    assert update.status_code == 200
+    sync = client.post(
+        "/api/v1/sync/push",
+        headers=auth_headers,
+        json={
+            "operation_id": str(uuid.uuid4()),
+            "device_id": "workstation",
+            "id": target_note["id"],
+            "path": target_note["path"],
+            "base_revision": 1,
+            "content_markdown": "# Core\nOffline edit",
+        },
+    )
+    assert sync.status_code == 200, sync.text
+    assert sync.json()["status"] == "conflict"
+    assert ".conflict-workstation-" in sync.json()["conflict"]["path"]
+
+
+def test_vault_rejects_path_traversal(client: TestClient, auth_headers: dict[str, str]) -> None:
+    response = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "Escape", "path": "../escape.md", "content_markdown": "no"},
+    )
+    assert response.status_code == 422
+
+
+def test_telegram_webhook_allowlist_and_idempotency(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/telegram/bots",
+        headers=auth_headers,
+        json={
+            "name": "work",
+            "token": "123456789:abcdefghijklmnopqrstuvwxyz",
+            "allowlist": [42],
+        },
+    )
+    assert created.status_code == 201, created.text
+    bot = created.json()
+    webhook_headers = {"X-Telegram-Bot-Api-Secret-Token": bot["webhook_secret"]}
+    update = {
+        "update_id": 100,
+        "message": {
+            "message_id": 5,
+            "chat": {"id": 42},
+            "from": {"id": 42, "username": "owner"},
+            "text": "Fix production alert",
+        },
+    }
+    url = f"/api/v1/webhooks/telegram/{bot['id']}"
+    assert client.post(url, headers=webhook_headers, json=update).status_code == 202
+    assert client.post(url, headers=webhook_headers, json=update).status_code == 202
+    tasks = client.get("/api/v1/tasks", headers=auth_headers).json()
+    assert len(tasks) == 1
+    assert tasks[0]["source"] == "telegram"
+    denied = {
+        **update,
+        "update_id": 101,
+        "message": {**update["message"], "chat": {"id": 7}, "from": {"id": 7}},
+    }
+    assert client.post(url, headers=webhook_headers, json=denied).status_code == 202
+    assert len(client.get("/api/v1/tasks", headers=auth_headers).json()) == 1

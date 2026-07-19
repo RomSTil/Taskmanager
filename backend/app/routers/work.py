@@ -1,0 +1,335 @@
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Security, status
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
+
+from ..database import get_session
+from ..dependencies import Principal, get_principal
+from ..models import (
+    ChecklistItem,
+    Comment,
+    OperationLog,
+    Project,
+    SavedView,
+    Task,
+    TaskStatus,
+)
+from ..schemas import (
+    ChecklistCreate,
+    ChecklistRead,
+    ChecklistUpdate,
+    CommentCreate,
+    CommentRead,
+    DashboardRead,
+    ProjectCreate,
+    ProjectRead,
+    ProjectUpdate,
+    SavedViewCreate,
+    SavedViewRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+)
+
+
+router = APIRouter(tags=["work"])
+
+
+def _project(session: Session, project_id: str) -> Project:
+    item = session.get(Project, project_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return item
+
+
+def _task(session: Session, task_id: str) -> Task:
+    item = session.scalar(
+        select(Task)
+        .options(selectinload(Task.project), selectinload(Task.checklist), selectinload(Task.comments))
+        .where(Task.id == task_id)
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return item
+
+
+def _check_version(current: int, base: int) -> None:
+    if current != base:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "version_conflict", "current_version": current},
+        )
+
+
+def _duplicate_operation(session: Session, operation_id: str | None, entity_type: str):
+    if not operation_id:
+        return None
+    return session.scalar(
+        select(OperationLog).where(
+            OperationLog.operation_id == operation_id,
+            OperationLog.entity_type == entity_type,
+        )
+    )
+
+
+@router.get("/projects", response_model=list[ProjectRead])
+def list_projects(
+    _: Annotated[Principal, Security(get_principal, scopes=["projects:read"])],
+    session: Annotated[Session, Depends(get_session)],
+    include_archived: bool = False,
+) -> list[Project]:
+    query = select(Project).order_by(Project.created_at)
+    if not include_archived:
+        query = query.where(Project.archived_at.is_(None))
+    return list(session.scalars(query))
+
+
+@router.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def create_project(
+    payload: ProjectCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["projects:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> Project:
+    values = payload.model_dump(exclude={"id"})
+    values["key"] = values["key"].upper()
+    project = Project(id=payload.id, **values) if payload.id else Project(**values)
+    session.add(project)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Project name, key or ID already exists") from exc
+    session.refresh(project)
+    return project
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectRead)
+def update_project(
+    project_id: str,
+    payload: ProjectUpdate,
+    _: Annotated[Principal, Security(get_principal, scopes=["projects:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> Project:
+    project = _project(session, project_id)
+    _check_version(project.version, payload.base_version)
+    changes = payload.model_dump(exclude_unset=True, exclude={"base_version", "archived"})
+    if changes.get("key"):
+        changes["key"] = changes["key"].upper()
+    for key, value in changes.items():
+        setattr(project, key, value)
+    if payload.archived is not None:
+        project.archived_at = datetime.now(UTC) if payload.archived else None
+    project.version += 1
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Project name or key already exists") from exc
+    session.refresh(project)
+    return project
+
+
+@router.get("/tasks", response_model=list[TaskRead])
+def list_tasks(
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read"])],
+    session: Annotated[Session, Depends(get_session)],
+    project_id: str | None = None,
+    task_status: TaskStatus | None = Query(default=None, alias="status"),
+    parent_id: str | None = None,
+    q: str | None = None,
+    include_archived: bool = False,
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[Task]:
+    query = (
+        select(Task)
+        .options(selectinload(Task.project), selectinload(Task.checklist), selectinload(Task.comments))
+        .order_by(Task.created_at.desc())
+        .limit(limit)
+    )
+    if not include_archived:
+        query = query.where(Task.archived_at.is_(None))
+    if project_id:
+        query = query.where(Task.project_id == project_id)
+    if task_status:
+        query = query.where(Task.status == task_status)
+    if parent_id:
+        query = query.where(Task.parent_id == parent_id)
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.where(or_(Task.title.ilike(pattern), Task.description_markdown.ilike(pattern)))
+    return list(session.scalars(query))
+
+
+@router.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
+def create_task(
+    payload: TaskCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+    operation_id: Annotated[str | None, Header(alias="X-Operation-Id")] = None,
+) -> Task:
+    duplicate = _duplicate_operation(session, operation_id, "task.create")
+    if duplicate and duplicate.entity_id:
+        return _task(session, duplicate.entity_id)
+    if payload.project_id:
+        _project(session, payload.project_id)
+    if payload.parent_id:
+        _task(session, payload.parent_id)
+    sequence = None
+    if payload.project_id:
+        session.execute(select(Project.id).where(Project.id == payload.project_id).with_for_update())
+        sequence = (session.scalar(select(func.max(Task.sequence)).where(Task.project_id == payload.project_id)) or 0) + 1
+    values = payload.model_dump(exclude={"id"})
+    task = Task(id=payload.id, sequence=sequence, **values) if payload.id else Task(sequence=sequence, **values)
+    session.add(task)
+    if operation_id:
+        session.add(OperationLog(operation_id=operation_id, entity_type="task.create", entity_id=task.id))
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if payload.id:
+            existing = session.get(Task, payload.id)
+            if existing:
+                return _task(session, existing.id)
+        raise HTTPException(status_code=409, detail="Task ID or operation already exists") from exc
+    return _task(session, task.id)
+
+
+@router.get("/tasks/{task_id}", response_model=TaskRead)
+def get_task(
+    task_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> Task:
+    return _task(session, task_id)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskRead)
+def update_task(
+    task_id: str,
+    payload: TaskUpdate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+    operation_id: Annotated[str | None, Header(alias="X-Operation-Id")] = None,
+) -> Task:
+    duplicate = _duplicate_operation(session, operation_id, "task.update")
+    if duplicate:
+        return _task(session, task_id)
+    task = _task(session, task_id)
+    _check_version(task.version, payload.base_version)
+    changes = payload.model_dump(exclude_unset=True, exclude={"base_version", "archived"})
+    if "project_id" in changes and changes["project_id"]:
+        _project(session, changes["project_id"])
+    if "parent_id" in changes and changes["parent_id"]:
+        if changes["parent_id"] == task.id:
+            raise HTTPException(status_code=422, detail="Task cannot be its own parent")
+        _task(session, changes["parent_id"])
+    for key, value in changes.items():
+        setattr(task, key, value)
+    if payload.status is not None:
+        task.completed_at = datetime.now(UTC) if payload.status == TaskStatus.done else None
+    if payload.archived is not None:
+        task.archived_at = datetime.now(UTC) if payload.archived else None
+    task.version += 1
+    if operation_id:
+        session.add(OperationLog(operation_id=operation_id, entity_type="task.update", entity_id=task.id))
+    session.commit()
+    return _task(session, task.id)
+
+
+@router.post("/tasks/{task_id}/comments", response_model=CommentRead, status_code=201)
+def add_comment(
+    task_id: str,
+    payload: CommentCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> Comment:
+    _task(session, task_id)
+    values = payload.model_dump(exclude={"id"})
+    comment = Comment(id=payload.id, task_id=task_id, **values) if payload.id else Comment(task_id=task_id, **values)
+    session.add(comment)
+    session.commit()
+    session.refresh(comment)
+    return comment
+
+
+@router.post("/tasks/{task_id}/checklist", response_model=ChecklistRead, status_code=201)
+def add_checklist_item(
+    task_id: str,
+    payload: ChecklistCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> ChecklistItem:
+    _task(session, task_id)
+    values = payload.model_dump(exclude={"id"})
+    item = ChecklistItem(id=payload.id, task_id=task_id, **values) if payload.id else ChecklistItem(task_id=task_id, **values)
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
+
+
+@router.patch("/checklist/{item_id}", response_model=ChecklistRead)
+def update_checklist_item(
+    item_id: str,
+    payload: ChecklistUpdate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> ChecklistItem:
+    item = session.get(ChecklistItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    _check_version(item.version, payload.base_version)
+    for key, value in payload.model_dump(exclude_unset=True, exclude={"base_version"}).items():
+        setattr(item, key, value)
+    item.version += 1
+    session.commit()
+    session.refresh(item)
+    return item
+
+
+@router.get("/views", response_model=list[SavedViewRead])
+def list_views(
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> list[SavedView]:
+    return list(session.scalars(select(SavedView).order_by(SavedView.position, SavedView.name)))
+
+
+@router.post("/views", response_model=SavedViewRead, status_code=201)
+def create_view(
+    payload: SavedViewCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> SavedView:
+    view = SavedView(**payload.model_dump())
+    session.add(view)
+    session.commit()
+    session.refresh(view)
+    return view
+
+
+@router.get("/dashboard", response_model=DashboardRead)
+def dashboard(
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> DashboardRead:
+    rows = session.execute(
+        select(Task.status, func.count(Task.id))
+        .where(Task.archived_at.is_(None))
+        .group_by(Task.status)
+    ).all()
+    counts = {value.value: count for value, count in rows}
+    overdue = session.scalar(
+        select(func.count(Task.id)).where(
+            Task.due_at < datetime.now(UTC),
+            Task.status != TaskStatus.done,
+            Task.archived_at.is_(None),
+        )
+    )
+    return DashboardRead(
+        **{value.value: counts.get(value.value, 0) for value in TaskStatus}, overdue=overdue or 0
+    )
