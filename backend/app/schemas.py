@@ -278,6 +278,16 @@ class SearchRead(ApiModel):
     notes: list[NoteIndexRead]
 
 
+class WorkspaceBootstrapRead(ApiModel):
+    server_time: datetime
+    user: UserRead
+    users: list[UserRead]
+    projects: list[ProjectRead]
+    tasks: list[TaskRead]
+    views: list[SavedViewRead]
+    dashboard: DashboardRead
+
+
 class BotCreate(ApiModel):
     name: str = Field(min_length=1, max_length=120)
     token: str = Field(min_length=20)

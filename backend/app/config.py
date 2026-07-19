@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "sqlite:///./data/taskman.db"
     vault_path: Path = Path("./data/vault")
-    cors_origins: str = "http://localhost:1420,http://127.0.0.1:1420"
+    cors_origins: str = (
+        "http://localhost:1420,http://127.0.0.1:1420,"
+        "tauri://localhost,http://tauri.localhost,https://tauri.localhost"
+    )
     public_url: str = "http://127.0.0.1:8765"
     jwt_secret: str = Field(default="development-secret-change-me-at-least-32-bytes", min_length=32)
     access_token_minutes: int = 15

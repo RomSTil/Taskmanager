@@ -16,6 +16,7 @@ from ..models import (
     SavedView,
     Task,
     TaskStatus,
+    User,
 )
 from ..schemas import (
     ChecklistCreate,
@@ -32,6 +33,8 @@ from ..schemas import (
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    UserRead,
+    WorkspaceBootstrapRead,
 )
 
 
@@ -72,6 +75,68 @@ def _duplicate_operation(session: Session, operation_id: str | None, entity_type
             OperationLog.operation_id == operation_id,
             OperationLog.entity_type == entity_type,
         )
+    )
+
+
+def _dashboard(session: Session) -> DashboardRead:
+    rows = session.execute(
+        select(Task.status, func.count(Task.id))
+        .where(Task.archived_at.is_(None))
+        .group_by(Task.status)
+    ).all()
+    counts = {value.value: count for value, count in rows}
+    overdue = session.scalar(
+        select(func.count(Task.id)).where(
+            Task.due_at < datetime.now(UTC),
+            Task.status != TaskStatus.done,
+            Task.archived_at.is_(None),
+        )
+    )
+    return DashboardRead(
+        **{value.value: counts.get(value.value, 0) for value in TaskStatus}, overdue=overdue or 0
+    )
+
+
+@router.get("/bootstrap", response_model=WorkspaceBootstrapRead)
+def bootstrap_workspace(
+    principal: Annotated[
+        Principal,
+        Security(get_principal, scopes=["projects:read", "tasks:read"]),
+    ],
+    session: Annotated[Session, Depends(get_session)],
+    task_limit: int = Query(default=200, ge=1, le=500),
+) -> WorkspaceBootstrapRead:
+    projects = list(
+        session.scalars(
+            select(Project)
+            .where(Project.archived_at.is_(None))
+            .order_by(Project.created_at)
+        )
+    )
+    tasks = list(
+        session.scalars(
+            select(Task)
+            .options(
+                selectinload(Task.project),
+                selectinload(Task.checklist),
+                selectinload(Task.comments),
+            )
+            .where(Task.archived_at.is_(None))
+            .order_by(Task.updated_at.desc())
+            .limit(task_limit)
+        )
+    )
+    views = list(session.scalars(select(SavedView).order_by(SavedView.position, SavedView.name)))
+    return WorkspaceBootstrapRead(
+        server_time=datetime.now(UTC),
+        user=UserRead.model_validate(principal.user),
+        users=list(
+            session.scalars(select(User).where(User.is_active.is_(True)).order_by(User.username))
+        ),
+        projects=projects,
+        tasks=tasks,
+        views=views,
+        dashboard=_dashboard(session),
     )
 
 
@@ -166,7 +231,7 @@ def list_tasks(
 @router.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: TaskCreate,
-    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
+    principal: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
     session: Annotated[Session, Depends(get_session)],
     operation_id: Annotated[str | None, Header(alias="X-Operation-Id")] = None,
 ) -> Task:
@@ -182,6 +247,16 @@ def create_task(
         session.execute(select(Project.id).where(Project.id == payload.project_id).with_for_update())
         sequence = (session.scalar(select(func.max(Task.sequence)).where(Task.project_id == payload.project_id)) or 0) + 1
     values = payload.model_dump(exclude={"id"})
+    source_data = dict(values.get("source_data") or {})
+    source_data["created_by_user_id"] = principal.user.id
+    source_data["created_by_username"] = principal.user.username
+    assignee_id = source_data.get("assignee_user_id")
+    if assignee_id:
+        assignee = session.get(User, assignee_id)
+        if not assignee or not assignee.is_active:
+            raise HTTPException(status_code=422, detail="Assignee is not an active user")
+        source_data["assignee_username"] = assignee.username
+    values["source_data"] = source_data
     task = Task(id=payload.id, sequence=sequence, **values) if payload.id else Task(sequence=sequence, **values)
     session.add(task)
     if operation_id:
@@ -317,19 +392,4 @@ def dashboard(
     _: Annotated[Principal, Security(get_principal, scopes=["tasks:read"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> DashboardRead:
-    rows = session.execute(
-        select(Task.status, func.count(Task.id))
-        .where(Task.archived_at.is_(None))
-        .group_by(Task.status)
-    ).all()
-    counts = {value.value: count for value, count in rows}
-    overdue = session.scalar(
-        select(func.count(Task.id)).where(
-            Task.due_at < datetime.now(UTC),
-            Task.status != TaskStatus.done,
-            Task.archived_at.is_(None),
-        )
-    )
-    return DashboardRead(
-        **{value.value: counts.get(value.value, 0) for value in TaskStatus}, overdue=overdue or 0
-    )
+    return _dashboard(session)

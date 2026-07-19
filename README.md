@@ -1,62 +1,86 @@
 # Taskman
 
-Личный центр управления проектами: задачи, Markdown-vault, Telegram-тикеты и контекст для Codex через локальный MCP bridge.
+Taskman — локальный task manager для проектов, задач, заметок и дедлайнов. Desktop-клиент построен на Tauri и React, backend — на FastAPI.
 
-## Что уже входит в MVP
+## Возможности
 
-- FastAPI API с первоначальной настройкой единственного владельца, JWT/refresh-сессиями и scoped API-токенами.
-- Проекты, Kanban, подзадачи, чек-листы, комментарии, приоритеты, сроки, теги, saved views и архив.
-- Канонический Markdown-vault с frontmatter, ревизиями, `[[wikilinks]]`, backlinks, поиском, вложениями и конфликтными копиями.
-- Tauri + React desktop: visual/raw/split редактор, offline-кэш задач, очередь операций, watcher и синхронизация локального vault.
-- Несколько Telegram-ботов с allowlist, командами, inline-кнопками, webhook idempotency и PostgreSQL outbox.
-- Локальный stdio MCP bridge для Codex; в нём отсутствует hard-delete.
-- Docker Compose: PostgreSQL, API, Telegram worker, Caddy/HTTPS и ежедневные резервные копии.
+- проекты, рабочие пространства и Markdown-заметки;
+- задачи со статусом, приоритетом, исполнителем и диапазоном дедлайна;
+- priority-board «Низкий / Обычный / Высокий / Срочный»;
+- drag-and-drop для изменения приоритета и порядка задач;
+- календарный режим с горизонтальной шкалой дедлайнов;
+- фильтр задач по проекту;
+- JWT-аутентификация, Telegram-интеграция и MCP bridge для Codex;
+- SQLite для разработки и PostgreSQL для production.
 
-## Локальная разработка
+## Структура
 
-Требования: Python 3.12, Node.js 20+, Rust stable с Windows MSVC toolchain и WebView2.
+```text
+backend/                 FastAPI API, модели, миграции и тесты
+frontend/task manager/   актуальный React + Tauri интерфейс
+desktop/                 предыдущий desktop-клиент
+mcp-bridge/              MCP bridge для Codex
+infra/                   Caddy и backup-скрипты
+scripts/                 скрипты разработки
+```
+
+## Требования
+
+Python 3.12+, Node.js 20+, Rust stable и WebView2 для сборки Tauri.
+
+## Быстрый запуск
+
+В первом терминале запустите backend:
 
 ```powershell
 Copy-Item .env.example .env
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e '.\backend[dev]'
+.\.venv\Scripts\python.exe -m pip install -e ".\backend[dev]"
 Set-Location backend
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8765
 ```
 
-Во втором терминале:
+Во втором терминале запустите frontend:
 
 ```powershell
-Set-Location desktop
+Set-Location "frontend\task manager"
 npm install
-npm run tauri dev
+npm run dev
 ```
 
-В development-режиме backend использует SQLite и создаёт таблицы автоматически. Production всегда использует Alembic и PostgreSQL.
+Откройте `http://127.0.0.1:1420` и укажите backend `http://127.0.0.1:8765`. Для desktop-режима используйте `npm run tauri dev`.
 
-## VPS
+## Тесты и сборка
 
-1. Настройте DNS домена на VPS и откройте TCP 80/443 и UDP 443.
-2. Скопируйте `.env.example` в `.env`, замените домен, пароль БД и все секреты. Секреты можно сгенерировать через `scripts/generate-secrets.ps1`.
-3. Запустите `docker compose up -d --build`.
-4. Откройте desktop, укажите `https://ваш-домен` и создайте владельца с `TASKMAN_SETUP_TOKEN`.
+```powershell
+# backend — из корня
+.\.venv\Scripts\python.exe -m pytest -q
 
-Проверка: `/healthz` показывает жизнь процесса, `/readyz` дополнительно проверяет БД. Каталог `backups/` содержит дамп PostgreSQL, архив vault и контрольные суммы. Обязательно копируйте его за пределы VPS.
+# frontend
+Set-Location "frontend\task manager"
+npm test -- --run
+npm run build
+```
 
-## Telegram
+## Production
 
-В desktop откройте **Настройки → Telegram-боты**, добавьте токен BotFather, default project и Telegram user/chat ID в allowlist. После сохранения нажмите **Webhook**. Обычный текст создаёт тикет; доступны `/help`, `/new`, `/tasks`, `/search`, `/status`, `/priority`, `/due`, `/project`, `/comment`.
+Production-конфигурация запускается через PostgreSQL, FastAPI, Telegram worker и Caddy:
 
-## Codex MCP
+```powershell
+Copy-Item .env.example .env
+docker compose up -d --build
+```
 
-Создайте токен в **Настройки → Codex MCP**, затем установите bridge:
+Перед запуском замените домен, пароли базы данных и секреты в `.env`. Состояние сервиса проверяется через `/healthz`, готовность приложения и базы — через `/readyz`.
+
+## MCP bridge для Codex
 
 ```powershell
 python -m pip install -e .\mcp-bridge
 taskman-mcp login --url https://tasks.example.com
 ```
 
-Добавьте в пользовательский `~/.codex/config.toml`:
+Конфигурация Codex:
 
 ```toml
 [mcp_servers.taskman]
@@ -67,16 +91,10 @@ startup_timeout_sec = 15
 tool_timeout_sec = 60
 ```
 
-Bridge хранит токен в системном credential store. Codex автоматически получает read-tools без лишних подтверждений, а операции записи попадают под режим `writes`. После изменения конфигурации перезапустите Codex и проверьте сервер через `/mcp` или `codex mcp list`.
+## Безопасность
 
-## Проверки
+Не добавляйте `.env`, токены, пароли, локальную базу и `.venv` в Git. Для production используйте PostgreSQL, HTTPS и резервные копии.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest backend\tests
-.\.venv\Scripts\python.exe -m ruff check backend mcp-bridge
-Set-Location desktop
-npm test
-npm run build
-```
+## Статус и лицензия
 
-Rust/Tauri: `npm run tauri build`. Windows installer появляется в `desktop/src-tauri/target/release/bundle`.
+Проект находится в активной разработке. Лицензия пока не выбрана.

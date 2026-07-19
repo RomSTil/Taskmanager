@@ -81,6 +81,60 @@ def test_project_task_subresources_and_optimistic_conflict(
     assert client.get("/api/v1/dashboard", headers=auth_headers).json()["in_progress"] == 1
 
 
+def test_workspace_bootstrap_returns_initial_client_state(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    assert client.get("/api/v1/bootstrap").status_code == 401
+
+    response = client.get("/api/v1/bootstrap", headers=auth_headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["user"]["username"] == "owner"
+    assert [user["username"] for user in payload["users"]] == ["owner"]
+    assert [project["key"] for project in payload["projects"]] == ["HOME"]
+    assert payload["tasks"] == []
+    assert payload["views"] == []
+    assert payload["dashboard"] == {
+        "inbox": 0,
+        "todo": 0,
+        "in_progress": 0,
+        "blocked": 0,
+        "done": 0,
+        "overdue": 0,
+    }
+    assert payload["server_time"]
+
+
+def test_task_creator_and_assignee_are_recorded(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    bootstrap = client.get("/api/v1/bootstrap", headers=auth_headers).json()
+    owner = bootstrap["user"]
+    project = bootstrap["projects"][0]
+
+    response = client.post(
+        "/api/v1/tasks",
+        headers=auth_headers,
+        json={
+            "title": "Prepare release",
+            "project_id": project["id"],
+            "due_at": "2026-10-31T23:59:00Z",
+            "source_data": {
+                "deadline_start": "2026-10-20T00:00:00Z",
+                "assignee_user_id": owner["id"],
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    source_data = response.json()["source_data"]
+    assert source_data["created_by_user_id"] == owner["id"]
+    assert source_data["created_by_username"] == "owner"
+    assert source_data["assignee_user_id"] == owner["id"]
+    assert source_data["assignee_username"] == "owner"
+
+
 def test_api_token_scopes_block_writes(client: TestClient, auth_headers: dict[str, str]) -> None:
     token = client.post(
         "/api/v1/auth/tokens",
