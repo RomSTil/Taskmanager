@@ -1,6 +1,10 @@
 import type {
   Note,
+  NoteShare,
   NoteIndex,
+  KnowledgeGraph,
+  Project,
+  PublicNote,
   SetupState,
   Task,
   TaskStatus,
@@ -138,7 +142,14 @@ export class TaskmanApi {
     );
   }
 
-  updateTask(task: Task, changes: { status?: TaskStatus; priority?: number }): Promise<Task> {
+  updateTask(task: Task, changes: {
+    status?: TaskStatus;
+    priority?: number;
+    title?: string;
+    description_markdown?: string;
+    project_id?: string | null;
+    archived?: boolean;
+  }): Promise<Task> {
     return this.request<Task>(
       `/tasks/${encodeURIComponent(task.id)}`,
       {
@@ -157,5 +168,66 @@ export class TaskmanApi {
 
   getNote(noteId: string): Promise<Note> {
     return this.request<Note>(`/notes/${encodeURIComponent(noteId)}`, {}, true);
+  }
+
+  getNoteShare(noteId: string): Promise<NoteShare | null> {
+    return this.request<NoteShare | null>(`/notes/${encodeURIComponent(noteId)}/share`, {}, true);
+  }
+
+  createNoteShare(noteId: string, expiresAt: string | null): Promise<NoteShare> {
+    return this.request<NoteShare>(`/notes/${encodeURIComponent(noteId)}/share`, { method: "POST", body: JSON.stringify({ expires_at: expiresAt }) }, true);
+  }
+
+  revokeNoteShare(noteId: string): Promise<void> {
+    return this.request<void>(`/notes/${encodeURIComponent(noteId)}/share`, { method: "DELETE" }, true);
+  }
+
+  publicNote(token: string): Promise<PublicNote> {
+    return this.request<PublicNote>(`/public/notes/${encodeURIComponent(token)}`);
+  }
+
+  createProject(input: { name: string; key?: string; description?: string; color?: string; parent_id?: string | null }): Promise<Project> {
+    return this.request<Project>("/projects", { method: "POST", body: JSON.stringify(input) }, true);
+  }
+
+  archiveProject(project: Project): Promise<Project> {
+    return this.request<Project>(
+      `/projects/${encodeURIComponent(project.id)}`,
+      { method: "PATCH", body: JSON.stringify({ base_version: project.version, archived: true }) },
+      true,
+    );
+  }
+
+  createNote(input: { title: string; content_markdown: string; tags?: string[]; project_id?: string | null }): Promise<Note> {
+    return this.request<Note>("/notes", { method: "POST", body: JSON.stringify(input) }, true);
+  }
+
+  updateNote(note: Note, input: { title: string; content_markdown: string; tags?: string[]; project_id?: string | null }): Promise<Note> {
+    return this.request<Note>(
+      `/notes/${encodeURIComponent(note.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          base_revision: note.revision,
+          title: input.title,
+          content_markdown: input.content_markdown,
+          tags: input.tags ?? note.tags,
+          project_id: input.project_id ?? note.project_id,
+        }),
+      },
+      true,
+    );
+  }
+
+  listTaskNotes(taskId: string): Promise<NoteIndex[]> {
+    return this.request<NoteIndex[]>(`/tasks/${encodeURIComponent(taskId)}/notes`, {}, true);
+  }
+
+  linkTaskNote(taskId: string, noteId: string): Promise<void> {
+    return this.request<void>(`/tasks/${encodeURIComponent(taskId)}/notes/${encodeURIComponent(noteId)}`, { method: "POST" }, true);
+  }
+
+  knowledgeGraph(): Promise<KnowledgeGraph> {
+    return this.request<KnowledgeGraph>("/knowledge-graph", {}, true);
   }
 }

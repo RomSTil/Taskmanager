@@ -64,8 +64,9 @@ class ApiTokenCreated(ApiTokenRead):
 
 class ProjectCreate(ApiModel):
     id: str | None = None
+    parent_id: str | None = None
     name: str = Field(min_length=1, max_length=160)
-    key: str = Field(min_length=2, max_length=12, pattern=r"^[A-Za-z][A-Za-z0-9_-]+$")
+    key: str | None = Field(default=None, min_length=2, max_length=12, pattern=r"^[A-Za-z][A-Za-z0-9_-]+$")
     description: str = ""
     color: str = Field(default="#8b5cf6", pattern=r"^#[0-9a-fA-F]{6}$")
 
@@ -78,11 +79,13 @@ class ProjectUpdate(ApiModel):
     )
     description: str | None = None
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    parent_id: str | None = None
     archived: bool | None = None
 
 
 class ProjectRead(ApiModel):
     id: str
+    parent_id: str | None
     name: str
     key: str
     description: str
@@ -233,6 +236,44 @@ class NoteIndexRead(ApiModel):
 
 class NoteRead(NoteIndexRead):
     content_markdown: str
+
+
+class NoteShareRead(ApiModel):
+    token: str
+    expires_at: datetime | None
+    revoked_at: datetime | None
+
+
+class NoteShareCreate(ApiModel):
+    expires_at: datetime | None = None
+
+
+class PublicNoteRead(ApiModel):
+    title: str
+    path: str
+    content_markdown: str
+    updated_at: datetime
+
+
+class KnowledgeGraphNode(ApiModel):
+    id: str
+    kind: Literal["task", "note"]
+    title: str
+    subtitle: str = ""
+    tags: list[str] = Field(default_factory=list)
+    status: TaskStatus | None = None
+    priority: int | None = None
+
+
+class KnowledgeGraphEdge(ApiModel):
+    source: str
+    target: str
+    kind: Literal["task_note", "subtask", "note_link"]
+
+
+class KnowledgeGraphRead(ApiModel):
+    nodes: list[KnowledgeGraphNode]
+    edges: list[KnowledgeGraphEdge]
 
 
 class BacklinkRead(ApiModel):

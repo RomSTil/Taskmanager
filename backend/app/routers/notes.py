@@ -1,5 +1,6 @@
 import hashlib
 import re
+import secrets
 from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import Annotated
@@ -11,13 +12,19 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import get_settings
 from ..database import get_session
 from ..dependencies import Principal, get_principal
-from ..models import Attachment, NoteIndex, NoteLink, OperationLog, Project, Task
+from ..models import Attachment, NoteIndex, NoteLink, NoteShare, OperationLog, Project, Task, TaskNote
 from ..schemas import (
     BacklinkRead,
     NoteCreate,
     NoteIndexRead,
     NoteRead,
+    NoteShareCreate,
+    NoteShareRead,
+    PublicNoteRead,
     NoteUpdate,
+    KnowledgeGraphEdge,
+    KnowledgeGraphNode,
+    KnowledgeGraphRead,
     SearchRead,
     SyncManifest,
     SyncPush,
@@ -47,6 +54,52 @@ def _note(session: Session, note_id: str, include_deleted: bool = False) -> Note
 def _read(note: NoteIndex, content: str | None = None) -> NoteRead:
     base = NoteIndexRead.model_validate(note).model_dump()
     return NoteRead(**base, content_markdown=read_note(note) if content is None else content)
+
+
+@router.get("/knowledge-graph", response_model=KnowledgeGraphRead)
+def knowledge_graph(
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read", "notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> KnowledgeGraphRead:
+    tasks = list(session.scalars(select(Task).where(Task.archived_at.is_(None))))
+    notes = list(session.scalars(select(NoteIndex).where(NoteIndex.deleted_at.is_(None))))
+    note_ids = {note.id for note in notes}
+    task_ids = {task.id for task in tasks}
+    titles = {note.title: note.id for note in notes}
+    edges = [
+        KnowledgeGraphEdge(source=link.task_id, target=link.note_id, kind="task_note")
+        for link in session.scalars(select(TaskNote))
+        if link.task_id in task_ids and link.note_id in note_ids
+    ]
+    edges.extend(
+        KnowledgeGraphEdge(source=task.parent_id, target=task.id, kind="subtask")
+        for task in tasks
+        if task.parent_id and task.parent_id in task_ids
+    )
+    edges.extend(
+        KnowledgeGraphEdge(source=link.source_note_id, target=titles[link.target_title], kind="note_link")
+        for link in session.scalars(select(NoteLink))
+        if link.source_note_id in note_ids and link.target_title in titles
+    )
+    return KnowledgeGraphRead(
+        nodes=[
+            KnowledgeGraphNode(id=task.id, kind="task", title=task.title, subtitle=task.identifier, tags=task.tags, status=task.status, priority=task.priority)
+            for task in tasks
+        ] + [
+            KnowledgeGraphNode(id=note.id, kind="note", title=note.title, subtitle=note.path, tags=note.tags)
+            for note in notes
+        ],
+        edges=edges,
+    )
+
+
+def _share_expired(share: NoteShare) -> bool:
+    if not share.expires_at:
+        return False
+    expires_at = share.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= datetime.now(UTC)
 
 
 def _project_key(session: Session, project_id: str | None) -> str | None:
@@ -132,6 +185,67 @@ def get_note(
     session: Annotated[Session, Depends(get_session)],
 ) -> NoteRead:
     return _read(_note(session, note_id))
+
+
+@router.get("/notes/{note_id}/share", response_model=NoteShareRead | None)
+def get_note_share(
+    note_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> NoteShare | None:
+    _note(session, note_id)
+    share = session.scalar(select(NoteShare).where(NoteShare.note_id == note_id, NoteShare.revoked_at.is_(None)))
+    if share and _share_expired(share):
+        return None
+    return share
+
+
+@router.post("/notes/{note_id}/share", response_model=NoteShareRead)
+def create_note_share(
+    note_id: str,
+    payload: NoteShareCreate,
+    _: Annotated[Principal, Security(get_principal, scopes=["notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> NoteShare:
+    _note(session, note_id)
+    share = session.scalar(select(NoteShare).where(NoteShare.note_id == note_id))
+    if not share:
+        share = NoteShare(note_id=note_id, token=secrets.token_urlsafe(24))
+        session.add(share)
+    elif share.revoked_at or _share_expired(share):
+        share.token = secrets.token_urlsafe(24)
+        share.revoked_at = None
+    share.expires_at = payload.expires_at
+    session.commit()
+    session.refresh(share)
+    return share
+
+
+@router.delete("/notes/{note_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_note_share(
+    note_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> None:
+    share = session.scalar(select(NoteShare).where(NoteShare.note_id == note_id, NoteShare.revoked_at.is_(None)))
+    if not share:
+        raise HTTPException(status_code=404, detail="Public link not found")
+    share.revoked_at = datetime.now(UTC)
+    session.commit()
+
+
+@router.get("/public/notes/{token}", response_model=PublicNoteRead)
+def read_public_note(token: str, session: Annotated[Session, Depends(get_session)]) -> PublicNoteRead:
+    share = session.scalar(select(NoteShare).where(NoteShare.token == token))
+    if not share or share.revoked_at or _share_expired(share):
+        raise HTTPException(status_code=404, detail="Public note not found")
+    note = _note(session, share.note_id)
+    return PublicNoteRead(
+        title=note.title,
+        path=note.path,
+        content_markdown=read_note(note),
+        updated_at=note.updated_at,
+    )
 
 
 @router.patch("/notes/{note_id}", response_model=NoteRead)

@@ -20,6 +20,7 @@ export interface TokenPair {
 
 export interface Project {
   id: string;
+  parent_id: string | null;
   name: string;
   key: string;
   description: string;
@@ -119,4 +120,38 @@ export interface NoteIndex {
 
 export interface Note extends NoteIndex {
   content_markdown: string;
+}
+
+export interface PublicNote {
+  title: string;
+  path: string;
+  content_markdown: string;
+  updated_at: string;
+}
+
+export interface NoteShare {
+  token: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface KnowledgeGraphNode {
+  id: string;
+  kind: "task" | "note";
+  title: string;
+  subtitle: string;
+  tags: string[];
+  status: TaskStatus | null;
+  priority: number | null;
+}
+
+export interface KnowledgeGraphEdge {
+  source: string;
+  target: string;
+  kind: "task_note" | "subtask" | "note_link";
+}
+
+export interface KnowledgeGraph {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
 }
