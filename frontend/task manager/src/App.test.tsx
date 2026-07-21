@@ -20,6 +20,7 @@ const workspace: WorkspaceBootstrap = {
   projects: [
     {
       id: "project-1",
+      parent_id: null,
       name: "Личное пространство",
       key: "HOME",
       description: "",
@@ -31,6 +32,7 @@ const workspace: WorkspaceBootstrap = {
     },
     {
       id: "project-2",
+      parent_id: null,
       name: "Работа",
       key: "WORK",
       description: "",

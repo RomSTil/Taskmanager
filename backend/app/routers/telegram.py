@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import httpx
@@ -10,12 +11,67 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import get_settings
 from ..database import get_session
 from ..dependencies import Principal, get_principal
-from ..models import BotConfig, Comment, OutboxMessage, Project, Task, TaskStatus, TelegramUpdate
+from ..models import BotConfig, ChecklistItem, Comment, OutboxMessage, Project, Task, TaskStatus, TelegramUpdate
 from ..schemas import BotCreate, BotCreated, BotRead, BotUpdate
 from ..security import decrypt_secret, encrypt_secret, hash_token, new_webhook_secret
+from ..services.vault import note_default_path, write_note
 
 
 router = APIRouter(tags=["telegram"])
+
+ACTION_WORDS = ("написать", "позвонить", "уточнить", "сделать", "проверить", "напомнить", "взвесить", "скинуть", "спросить", "узнать")
+NOTE_WORDS = ("нельзя", "можно", "помни", "важно", "правило")
+WEEKDAYS = {"понедельник": 0, "вторник": 1, "среду": 2, "среда": 2, "четверг": 3, "пятницу": 4, "пятница": 4, "субботу": 5, "суббота": 5, "воскресенье": 6}
+PHONE_RE = re.compile(r"(?:\+7|8)[\s()\-]*\d(?:[\s()\-]*\d){9}")
+
+
+def _deadline_from_text(text: str) -> datetime | None:
+    lowered = text.casefold()
+    today = datetime.now(UTC).date()
+    if "завтра" in lowered:
+        return datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+    for word, weekday in WEEKDAYS.items():
+        if re.search(rf"\b{word}\b", lowered):
+            days = (weekday - today.weekday()) % 7 or 7
+            return datetime.combine(today + timedelta(days=days), datetime.min.time(), tzinfo=UTC)
+    return None
+
+
+def _steps_from_text(text: str) -> list[str]:
+    matches = list(re.finditer(r"\b(?:" + "|".join(ACTION_WORDS) + r")\b", text, flags=re.IGNORECASE))
+    if len(matches) < 2:
+        return []
+    steps: list[str] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        step = text[match.start():end].strip(" ,.;:-")
+        step = re.sub(r"\s+(?:и|потом)\s*$", "", step, flags=re.IGNORECASE)
+        if step and step.casefold() not in {item.casefold() for item in steps}:
+            steps.append(step[:500])
+    return steps
+
+
+def _message_kind(text: str) -> str:
+    lowered = text.casefold()
+    if re.fullmatch(r"[\d\s.,]+", text):
+        return "clarify"
+    if lowered.startswith("задача:"):
+        return "task"
+    if lowered.startswith("заметка:"):
+        return "note"
+    if lowered.startswith("контакт:"):
+        return "contact"
+    if PHONE_RE.search(text):
+        return "contact"
+    if lowered.startswith("подскажите") or "как происходит процесс" in lowered:
+        return "template"
+    if any(word in lowered for word in NOTE_WORDS):
+        return "note"
+    if any(re.search(rf"\b{word}\b", lowered) for word in ACTION_WORDS) or _deadline_from_text(text):
+        return "task"
+    if re.match(r"^с\s+(?:вб|ozon|озон|яндекс|yandex)\b", lowered):
+        return "note"
+    return "task"
 
 
 def _bot(session: Session, bot_id: str) -> BotConfig:
@@ -85,8 +141,10 @@ def _create_ticket(session: Session, bot: BotConfig, chat_id: int, text: str, me
         project_id=bot.project_id,
         sequence=sequence,
         title=text.splitlines()[0][:300],
-        description_markdown=text if "\n" in text else "",
+        description_markdown=text,
         status=TaskStatus.inbox,
+        due_at=_deadline_from_text(text),
+        tags=["telegram"],
         source="telegram",
         source_data={
             "bot_id": bot.id,
@@ -97,7 +155,25 @@ def _create_ticket(session: Session, bot: BotConfig, chat_id: int, text: str, me
     )
     session.add(task)
     session.flush()
+    for position, step in enumerate(_steps_from_text(text)):
+        session.add(ChecklistItem(task_id=task.id, text=step, position=position))
     return task
+
+
+def _create_note(session: Session, bot: BotConfig, text: str, message: dict[str, Any], kind: str) -> str:
+    project = session.get(Project, bot.project_id) if bot.project_id else None
+    title = text.splitlines()[0][:240]
+    tags = ["telegram", kind]
+    note, _ = write_note(
+        session,
+        title=title,
+        path=note_default_path(f"TG-{message.get('message_id', 'note')}-{title}", project.key if project else None),
+        content=text,
+        project_id=bot.project_id,
+        tags=tags,
+        device_id="telegram",
+    )
+    return note.title
 
 
 def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -> None:
@@ -187,8 +263,25 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
     if not title:
         _queue(session, bot, chat_id, "После /new нужен текст задачи.")
         return
+    kind = "task" if command == "/new" else _message_kind(title)
+    if kind == "clarify":
+        _queue(
+            session,
+            bot,
+            chat_id,
+            "Не понял, что создать: задачу, заметку или контакт. Напиши, например: «задача: ...» или «заметка: ...».",
+        )
+        return
+    if kind in {"note", "contact", "template"}:
+        note_title = _create_note(session, bot, title, message, kind)
+        labels = {"note": "Заметка", "contact": "Контакт", "template": "Шаблон"}
+        _queue(session, bot, chat_id, f"{labels[kind]} сохранён: <b>{note_title}</b>")
+        return
     task = _create_ticket(session, bot, chat_id, title, message)
-    _queue(session, bot, chat_id, f"Создан тикет <b>{task.identifier}</b>\n{task.title}", _task_buttons(task))
+    suffix = f"\nСрок: {task.due_at.date().isoformat()}" if task.due_at else ""
+    if _steps_from_text(title):
+        suffix += f"\nШагов: {len(_steps_from_text(title))}"
+    _queue(session, bot, chat_id, f"Создана задача <b>{task.identifier}</b>\n{task.title}{suffix}", _task_buttons(task))
 
 
 def _handle_callback(session: Session, bot: BotConfig, callback: dict[str, Any]) -> None:
@@ -205,6 +298,25 @@ def _handle_callback(session: Session, bot: BotConfig, callback: dict[str, Any])
             task.completed_at = datetime.now(UTC) if task.status == TaskStatus.done else None
             task.version += 1
             _queue(session, bot, chat_id, f"{task.identifier}: статус → {task.status.value}")
+
+
+def process_telegram_update(session: Session, bot: BotConfig, update: dict[str, Any]) -> bool:
+    """Process one Telegram update once, for either a webhook or local polling."""
+    update_id = int(update.get("update_id", -1))
+    if update_id < 0:
+        raise HTTPException(status_code=422, detail="Missing Telegram update_id")
+    if session.scalar(
+        select(TelegramUpdate.id).where(
+            TelegramUpdate.bot_id == bot.id, TelegramUpdate.update_id == update_id
+        )
+    ):
+        return False
+    session.add(TelegramUpdate(bot_id=bot.id, update_id=update_id))
+    if "message" in update:
+        _handle_message(session, bot, update["message"])
+    elif "callback_query" in update:
+        _handle_callback(session, bot, update["callback_query"])
+    return True
 
 
 @router.get("/integrations/telegram/bots", response_model=list[BotRead])
@@ -314,19 +426,6 @@ def telegram_webhook(
     bot = _bot(session, bot_id)
     if not secret or hash_token(secret) != bot.webhook_secret_hash or not bot.enabled:
         raise HTTPException(status_code=403, detail="Invalid Telegram webhook")
-    update_id = int(update.get("update_id", -1))
-    if update_id < 0:
-        raise HTTPException(status_code=422, detail="Missing Telegram update_id")
-    if session.scalar(
-        select(TelegramUpdate.id).where(
-            TelegramUpdate.bot_id == bot.id, TelegramUpdate.update_id == update_id
-        )
-    ):
-        return {"accepted": True}
-    session.add(TelegramUpdate(bot_id=bot.id, update_id=update_id))
-    if "message" in update:
-        _handle_message(session, bot, update["message"])
-    elif "callback_query" in update:
-        _handle_callback(session, bot, update["callback_query"])
+    process_telegram_update(session, bot, update)
     session.commit()
     return {"accepted": True}

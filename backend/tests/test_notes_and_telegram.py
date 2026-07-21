@@ -2,6 +2,8 @@ import uuid
 
 from fastapi.testclient import TestClient
 
+from app.routers.telegram import _message_kind, _steps_from_text
+
 
 def test_note_roundtrip_links_and_sync_conflict(
     client: TestClient, auth_headers: dict[str, str]
@@ -98,3 +100,16 @@ def test_telegram_webhook_allowlist_and_idempotency(
     }
     assert client.post(url, headers=webhook_headers, json=denied).status_code == 202
     assert len(client.get("/api/v1/tasks", headers=auth_headers).json()) == 1
+
+
+def test_telegram_message_rules_classify_examples() -> None:
+    assert _message_kind("+7 985 84 000 84 озон Ксения") == "contact"
+    assert _message_kind("Нельзя недовесить нельзя!") == "note"
+    assert _message_kind("12 349") == "clarify"
+    assert _message_kind("Написать завтра Ксении") == "task"
+    assert _message_kind("Подскажите, пожалуйста, как происходит процесс отгрузки?") == "template"
+    assert _steps_from_text("Напомнить Лёше взвесить коробку и скинуть Свете") == [
+        "Напомнить Лёше",
+        "взвесить коробку",
+        "скинуть Свете",
+    ]

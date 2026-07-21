@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     encryption_key: str | None = None
     max_attachment_mb: int = 25
     telegram_poll_seconds: float = 1.0
+    telegram_polling_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=("../.env", ".env"),

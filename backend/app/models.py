@@ -80,6 +80,9 @@ class Project(TimestampMixin, VersionMixin, Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     key: Mapped[str] = mapped_column(String(12), unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -87,6 +90,8 @@ class Project(TimestampMixin, VersionMixin, Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="project")
+    parent: Mapped["Project | None"] = relationship(remote_side="Project.id", back_populates="children")
+    children: Mapped[list["Project"]] = relationship(back_populates="parent")
 
 
 class Task(TimestampMixin, VersionMixin, Base):
@@ -188,6 +193,18 @@ class NoteIndex(TimestampMixin, Base):
     )
 
 
+class TaskNote(Base):
+    """A deliberate knowledge connection between a task and a note."""
+
+    __tablename__ = "task_notes"
+    __table_args__ = (UniqueConstraint("task_id", "note_id", name="uq_task_note"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    note_id: Mapped[str] = mapped_column(ForeignKey("note_index.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class NoteRevision(Base):
     __tablename__ = "note_revisions"
     __table_args__ = (UniqueConstraint("note_id", "revision", name="uq_note_revision"),)
@@ -210,6 +227,19 @@ class NoteLink(Base):
         ForeignKey("note_index.id", ondelete="CASCADE"), index=True
     )
     target_title: Mapped[str] = mapped_column(String(240), index=True)
+
+
+class NoteShare(Base):
+    __tablename__ = "note_shares"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    note_id: Mapped[str] = mapped_column(
+        ForeignKey("note_index.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Attachment(TimestampMixin, Base):

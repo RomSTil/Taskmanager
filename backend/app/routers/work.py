@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Security, status
@@ -11,10 +12,12 @@ from ..dependencies import Principal, get_principal
 from ..models import (
     ChecklistItem,
     Comment,
+    NoteIndex,
     OperationLog,
     Project,
     SavedView,
     Task,
+    TaskNote,
     TaskStatus,
     User,
 )
@@ -33,6 +36,7 @@ from ..schemas import (
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    NoteIndexRead,
     UserRead,
     WorkspaceBootstrapRead,
 )
@@ -46,6 +50,20 @@ def _project(session: Session, project_id: str) -> Project:
     if not item:
         raise HTTPException(status_code=404, detail="Project not found")
     return item
+
+
+def _generated_project_key(session: Session, name: str) -> str:
+    """Create a short, stable-looking internal key without asking the user for it."""
+    base = re.sub(r"[^A-Za-z0-9]", "", name.upper())[:8] or "WORK"
+    if len(base) < 2:
+        base = f"WS{base}"
+    candidate = base
+    number = 2
+    while session.scalar(select(Project.id).where(Project.key == candidate)):
+        suffix = str(number)
+        candidate = f"{base[:12 - len(suffix)]}{suffix}"
+        number += 1
+    return candidate
 
 
 def _task(session: Session, task_id: str) -> Task:
@@ -159,7 +177,9 @@ def create_project(
     session: Annotated[Session, Depends(get_session)],
 ) -> Project:
     values = payload.model_dump(exclude={"id"})
-    values["key"] = values["key"].upper()
+    if values.get("parent_id"):
+        _project(session, values["parent_id"])
+    values["key"] = (values["key"] or _generated_project_key(session, values["name"])).upper()
     project = Project(id=payload.id, **values) if payload.id else Project(**values)
     session.add(project)
     try:
@@ -181,12 +201,26 @@ def update_project(
     project = _project(session, project_id)
     _check_version(project.version, payload.base_version)
     changes = payload.model_dump(exclude_unset=True, exclude={"base_version", "archived"})
+    if "parent_id" in changes and changes["parent_id"]:
+        if changes["parent_id"] == project.id:
+            raise HTTPException(status_code=422, detail="Workspace cannot be its own parent")
+        _project(session, changes["parent_id"])
     if changes.get("key"):
         changes["key"] = changes["key"].upper()
     for key, value in changes.items():
         setattr(project, key, value)
     if payload.archived is not None:
         project.archived_at = datetime.now(UTC) if payload.archived else None
+        if payload.archived:
+            pending = [project.id]
+            while pending:
+                children = list(session.scalars(select(Project).where(Project.parent_id.in_(pending))))
+                pending = []
+                for child in children:
+                    if not child.archived_at:
+                        child.archived_at = project.archived_at
+                        child.version += 1
+                    pending.append(child.id)
     project.version += 1
     try:
         session.commit()
@@ -280,6 +314,55 @@ def get_task(
     session: Annotated[Session, Depends(get_session)],
 ) -> Task:
     return _task(session, task_id)
+
+
+@router.get("/tasks/{task_id}/notes", response_model=list[NoteIndexRead])
+def list_task_notes(
+    task_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:read", "notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> list[NoteIndex]:
+    _task(session, task_id)
+    return list(
+        session.scalars(
+            select(NoteIndex)
+            .join(TaskNote, TaskNote.note_id == NoteIndex.id)
+            .where(TaskNote.task_id == task_id, NoteIndex.deleted_at.is_(None))
+            .order_by(TaskNote.created_at.desc())
+        )
+    )
+
+
+@router.post("/tasks/{task_id}/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def link_task_note(
+    task_id: str,
+    note_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write", "notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> None:
+    _task(session, task_id)
+    note = session.get(NoteIndex, note_id)
+    if not note or note.deleted_at:
+        raise HTTPException(status_code=404, detail="Note not found")
+    exists = session.scalar(select(TaskNote).where(TaskNote.task_id == task_id, TaskNote.note_id == note_id))
+    if not exists:
+        session.add(TaskNote(task_id=task_id, note_id=note_id))
+        session.commit()
+
+
+@router.delete("/tasks/{task_id}/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_task_note(
+    task_id: str,
+    note_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["tasks:write", "notes:read"])],
+    session: Annotated[Session, Depends(get_session)],
+) -> None:
+    _task(session, task_id)
+    link = session.scalar(select(TaskNote).where(TaskNote.task_id == task_id, TaskNote.note_id == note_id))
+    if not link:
+        raise HTTPException(status_code=404, detail="Task-note link not found")
+    session.delete(link)
+    session.commit()
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskRead)

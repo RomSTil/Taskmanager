@@ -67,8 +67,26 @@ def list_tasks(
 
 @mcp.tool(annotations=READ)
 def get_task(task_id: str) -> dict[str, Any]:
-    """Read a task with its checklist and comments."""
+    """Read a task with its checklist, comments and identifier."""
     return _request("GET", f"/tasks/{task_id}")
+
+
+@mcp.tool(annotations=READ)
+def list_task_notes(task_id: str) -> list[dict[str, Any]]:
+    """List knowledge notes deliberately connected to a task."""
+    return _request("GET", f"/tasks/{task_id}/notes")
+
+
+@mcp.tool(annotations=WRITE)
+def link_task_note(task_id: str, note_id: str) -> None:
+    """Connect an existing note to a task so the relationship is usable by people and AI."""
+    return _request("POST", f"/tasks/{task_id}/notes/{note_id}")
+
+
+@mcp.tool(annotations=WRITE)
+def unlink_task_note(task_id: str, note_id: str) -> None:
+    """Remove only the connection between a task and a note; neither item is deleted."""
+    return _request("DELETE", f"/tasks/{task_id}/notes/{note_id}")
 
 
 @mcp.tool(annotations=WRITE)
@@ -201,6 +219,12 @@ def write_note(
             "device_id": "codex-mcp",
         },
     )
+
+
+@mcp.tool(annotations=READ)
+def knowledge_graph() -> dict[str, Any]:
+    """Return task, note and link graph for visual reasoning or AI context selection."""
+    return _request("GET", "/knowledge-graph")
 
 
 @mcp.tool(annotations=READ)

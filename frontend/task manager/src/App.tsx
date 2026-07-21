@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type MouseEvent, type PointerEvent } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -16,11 +16,17 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ApiError, clearSession, getSavedApiUrl, getSession, TaskmanApi } from "./api";
 import type {
   Dashboard,
+  KnowledgeGraph,
+  KnowledgeGraphNode,
   Note,
   NoteIndex,
+  NoteShare,
+  PublicNote,
   Project,
   Task,
   TaskStatus,
@@ -29,7 +35,21 @@ import type {
 import "./App.css";
 
 type Phase = "checking" | "auth" | "workspace";
-type ActiveView = "overview" | "tasks" | "notes" | `project:${string}`;
+type ActiveView = "overview" | "tasks" | "notes" | "graph" | `project:${string}`;
+
+const ACTIVE_VIEW_KEY = "taskman.active-view";
+
+function readActiveView(): ActiveView {
+  try {
+    const saved = localStorage.getItem(ACTIVE_VIEW_KEY);
+    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved?.startsWith("project:")) {
+      return saved as ActiveView;
+    }
+  } catch {
+    // The app still works in browsers where storage is disabled.
+  }
+  return "overview";
+}
 type TaskFilter = TaskStatus | "overdue" | null;
 
 const OVERVIEW_ORDER_KEY = "taskman.overviewTaskOrder";
@@ -166,7 +186,7 @@ function SortablePriorityCard({
           ⠿
         </button>
       </div>
-      <button className="priority-card-title" type="button" onClick={() => onSelect(task)}>
+      <button className="priority-card-title" type="button" onClick={() => onSelect(task)} onContextMenu={(event) => { event.preventDefault(); onSelect(task); }}>
         {task.title}
       </button>
       <div className="priority-card-project">
@@ -343,7 +363,7 @@ function TaskList({
   return (
     <div className="task-list">
       {tasks.map((task) => (
-        <button className="task-row" type="button" key={task.id} onClick={() => onSelect(task)}>
+        <button className="task-row" type="button" key={task.id} onClick={() => onSelect(task)} onContextMenu={(event) => { event.preventDefault(); onSelect(task); }}>
           <span className={`priority priority-${task.priority}`} />
           <span className="task-main">
             <strong>{task.title}</strong>
@@ -356,7 +376,107 @@ function TaskList({
   );
 }
 
-function App() {
+function workspaceIds(projectId: string, projects: Project[]): Set<string> {
+  const result = new Set([projectId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const project of projects) {
+      if (project.parent_id && result.has(project.parent_id) && !result.has(project.id)) {
+        result.add(project.id);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+
+function noteBody(markdown: string): string {
+  return markdown.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/, "");
+}
+
+function MarkdownContent({ markdown }: { markdown: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{noteBody(markdown)}</ReactMarkdown>;
+}
+
+function KnowledgeGraphView({
+  graph,
+  onSelect,
+}: {
+  graph: KnowledgeGraph;
+  onSelect: (node: KnowledgeGraphNode) => void;
+}) {
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [dragging, setDragging] = useState<string | null>(null);
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const positionFor = (node: KnowledgeGraphNode, index: number) => positions[node.id] ?? {
+    x: 500 + 330 * Math.cos((index / Math.max(graph.nodes.length, 1)) * Math.PI * 2 - Math.PI / 2),
+    y: 325 + 220 * Math.sin((index / Math.max(graph.nodes.length, 1)) * Math.PI * 2 - Math.PI / 2),
+  };
+  const moveNode = (event: PointerEvent<SVGCircleElement>) => {
+    if (!dragging) return;
+    const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+    if (!bounds) return;
+    setPositions((current) => ({
+      ...current,
+      [dragging]: {
+        x: Math.max(45, Math.min(955, ((event.clientX - bounds.left) / bounds.width) * 1000)),
+        y: Math.max(45, Math.min(605, ((event.clientY - bounds.top) / bounds.height) * 650)),
+      },
+    }));
+  };
+
+  if (!graph.nodes.length) {
+    return <div className="empty-state"><span>◌</span><h3>Карта пока пустая</h3><p>Создай задачу и прикрепи к ней заметку — они появятся здесь.</p></div>;
+  }
+
+  return (
+      <div className="knowledge-graph-shell">
+      <div className="graph-hint">Задачи, решения и материалы в одном рабочем пространстве</div>
+      <svg className="knowledge-graph" viewBox="0 0 1000 650" role="img" aria-label="Карта задач и заметок">
+        <defs>
+          <pattern id="graph-grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="rgba(255,255,255,.08)" /></pattern>
+        </defs>
+        <rect width="1000" height="650" fill="url(#graph-grid)" />
+        {graph.edges.map((edge, index) => {
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          if (!source || !target) return null;
+          const sourcePosition = positionFor(source, graph.nodes.indexOf(source));
+          const targetPosition = positionFor(target, graph.nodes.indexOf(target));
+          return <line key={`${edge.source}-${edge.target}-${index}`} className={`graph-edge ${edge.kind}`} x1={sourcePosition.x} y1={sourcePosition.y} x2={targetPosition.x} y2={targetPosition.y} />;
+        })}
+        {graph.nodes.map((node, index) => {
+          const position = positionFor(node, index);
+          const isTask = node.kind === "task";
+          const tagLabel = node.tags.length ? `#${node.tags[0]}${node.tags.length > 1 ? ` +${node.tags.length - 1}` : ""}` : "";
+          return (
+            <g className="graph-node" key={node.id} transform={`translate(${position.x} ${position.y})`}>
+              <circle className={isTask ? `graph-orb task priority-${node.priority ?? 1}` : "graph-orb note"} r={isTask ? 28 : 24} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDragging(node.id); }} onPointerMove={moveNode} onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); setDragging(null); }} onClick={() => { if (!dragging) onSelect(node); }} />
+              <text className="graph-node-kind" textAnchor="middle" dy="4">{isTask ? "✓" : "◇"}</text>
+              <text className="graph-node-title" textAnchor="middle" y={isTask ? 48 : 44}>{node.title.length > 22 ? `${node.title.slice(0, 21)}…` : node.title}</text>
+              {tagLabel && <text className="graph-node-tag" textAnchor="middle" y={isTask ? 64 : 60}>{tagLabel}</text>}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function PublicNotePage({ token }: { token: string }) {
+  const [note, setNote] = useState<PublicNote | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const api = new TaskmanApi(getSavedApiUrl());
+    void api.publicNote(token).then(setNote).catch(() => setError("Эта ссылка недействительна или заметка больше не доступна."));
+  }, [token]);
+
+  return <main className="public-note-page">{error ? <section className="public-note-card"><p className="eyebrow">TASKMAN</p><h1>Заметка недоступна</h1><p>{error}</p></section> : !note ? <div className="loading-line">Открываем заметку…</div> : <article className="public-note-card"><header><p className="eyebrow">ОТКРЫТАЯ ЗАМЕТКА</p><h1>{note.title}</h1><span>{note.path}</span></header><div className="markdown-document"><MarkdownContent markdown={note.content_markdown} /></div><footer>Открыто через Taskman</footer></article>}</main>;
+}
+
+function WorkspaceApp() {
   const [phase, setPhase] = useState<Phase>("checking");
   const [apiUrl, setApiUrl] = useState(getSavedApiUrl);
   const [setupRequired, setSetupRequired] = useState(false);
@@ -366,14 +486,45 @@ function App() {
   const [workspace, setWorkspace] = useState<WorkspaceBootstrap | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [activeView, setActiveView] = useState<ActiveView>("overview");
+  const [activeView, setActiveView] = useState<ActiveView>(readActiveView);
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(null);
   const [notes, setNotes] = useState<NoteIndex[]>([]);
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [notesLoading, setNotesLoading] = useState(false);
+  const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphNode, setGraphNode] = useState<KnowledgeGraphNode | null>(null);
+  const [graphNote, setGraphNote] = useState<Note | null>(null);
+  const [graphDrawerWidth, setGraphDrawerWidth] = useState(520);
+  const [resizingGraphDrawer, setResizingGraphDrawer] = useState(false);
+  const [linkedNotes, setLinkedNotes] = useState<NoteIndex[]>([]);
+  const [noteCreateOpen, setNoteCreateOpen] = useState(false);
+  const [newNoteTitle, setNewNoteTitle] = useState("");
+  const [newNoteContent, setNewNoteContent] = useState("");
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
+  const [editingNote, setEditingNote] = useState<Note | null>(null);
+  const [editorTitle, setEditorTitle] = useState("");
+  const [editorContent, setEditorContent] = useState("");
+  const [editorTags, setEditorTags] = useState("");
+  const [editorError, setEditorError] = useState("");
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [workspaceParent, setWorkspaceParent] = useState("");
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceMenu, setWorkspaceMenu] = useState<{ project: Project; x: number; y: number } | null>(null);
   const [pageError, setPageError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [taskEditorTitle, setTaskEditorTitle] = useState("");
+  const [taskEditorDescription, setTaskEditorDescription] = useState("");
+  const [taskEditorStatus, setTaskEditorStatus] = useState<TaskStatus>("inbox");
+  const [taskEditorPriority, setTaskEditorPriority] = useState(1);
+  const [taskEditorProject, setTaskEditorProject] = useState("");
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
+  const [shareMessage, setShareMessage] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareDialogNote, setShareDialogNote] = useState<Note | null>(null);
+  const [shareInfo, setShareInfo] = useState<NoteShare | null>(null);
+  const [shareDuration, setShareDuration] = useState("7");
   const [detailError, setDetailError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -386,6 +537,7 @@ function App() {
   const [overviewOrder, setOverviewOrder] = useState<string[]>(readOverviewOrder);
 
   const api = useMemo(() => new TaskmanApi(apiUrl), [apiUrl]);
+  void selectGraphNode;
 
   const connect = useCallback(async () => {
     setBusy(true);
@@ -416,6 +568,34 @@ function App() {
   useEffect(() => {
     void connect();
   }, [connect]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_VIEW_KEY, activeView);
+    } catch {
+      // Keeping the current section is optional when browser storage is disabled.
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    if (phase !== "workspace") return;
+    if (activeView === "notes") void loadNotes();
+    if (activeView === "graph") void showGraph();
+  }, [phase]);
+
+  useEffect(() => {
+    if (workspace && activeView.startsWith("project:") && !workspace.projects.some((project) => project.id === activeView.slice("project:".length))) {
+      setActiveView("overview");
+    }
+  }, [activeView, workspace]);
+
+  useEffect(() => {
+    if (graphNode?.kind !== "note") {
+      setGraphNote(null);
+      return;
+    }
+    void api.getNote(graphNode.id).then(setGraphNote).catch(() => setGraphNote(null));
+  }, [api, graphNode]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -500,6 +680,77 @@ function App() {
     void loadNotes();
   }
 
+  function openWorkspaceCreator(parentId?: string) {
+    setWorkspaceName("");
+    setWorkspaceParent(parentId ?? "");
+    setWorkspaceError("");
+    setWorkspaceCreateOpen(true);
+  }
+
+  function openWorkspaceMenu(event: MouseEvent<HTMLButtonElement>, project: Project) {
+    event.preventDefault();
+    setWorkspaceMenu({ project, x: event.clientX, y: event.clientY });
+  }
+
+  async function archiveWorkspace(project: Project) {
+    setBusy(true);
+    setWorkspaceMenu(null);
+    try {
+      await api.archiveProject(project);
+      if (activeProject?.id === project.id) showTasks();
+      await refreshWorkspace();
+    } catch (reason) {
+      setPageError(reason instanceof Error ? reason.message : "Не удалось удалить пространство");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setWorkspaceError("");
+    try {
+      const created = await api.createProject({
+        name: workspaceName.trim(),
+        parent_id: workspaceParent || null,
+      });
+      await refreshWorkspace();
+      setWorkspaceCreateOpen(false);
+      showProject(created);
+    } catch (reason) {
+      setWorkspaceError(reason instanceof Error ? reason.message : "Не удалось создать рабочее пространство");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function showGraph() {
+    setActiveView("graph");
+    setTaskFilter(null);
+    setGraphLoading(true);
+    setPageError("");
+    try {
+      setGraph(await api.knowledgeGraph());
+    } catch (reason) {
+      setPageError(reason instanceof Error ? reason.message : "Не удалось загрузить карту связей");
+    } finally {
+      setGraphLoading(false);
+    }
+  }
+
+  async function selectGraphNode(node: KnowledgeGraphNode) {
+    setGraphNode(node);
+    setGraphNote(null);
+    if (node.kind === "note") {
+      try {
+        setGraphNote(await api.getNote(node.id));
+      } catch (reason) {
+        setPageError(reason instanceof Error ? reason.message : "Не удалось открыть заметку");
+      }
+    }
+  }
+
   async function openNote(note: NoteIndex) {
     setBusy(true);
     setDetailError("");
@@ -507,6 +758,174 @@ function App() {
       setSelectedNote(await api.getNote(note.id));
     } catch (reason) {
       setPageError(reason instanceof Error ? reason.message : "Не удалось открыть заметку");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createPublicLink(note: Note, expiresAt: string | null) {
+    const viewer = window.open("about:blank", "_blank");
+    if (viewer) viewer.opener = null;
+    setShareMessage("");
+    setShareUrl("");
+    try {
+      const share = await api.createNoteShare(note.id, expiresAt);
+      const { token } = share;
+      const link = `${window.location.origin}/public/notes/${encodeURIComponent(token)}`;
+      if (viewer) viewer.location.href = link;
+      setShareUrl(link);
+      setShareMessage("Публичная ссылка готова.");
+      setShareInfo(share);
+      return share;
+    } catch (reason) {
+      viewer?.close();
+      setShareMessage(reason instanceof Error ? reason.message : "Не удалось создать ссылку.");
+      return null;
+    }
+  }
+
+  async function openShareDialog(note: Note) {
+    setShareDialogNote(note);
+    setShareInfo(null);
+    setShareDuration("7");
+    setShareMessage("");
+    setShareUrl("");
+    try {
+      const existing = await api.getNoteShare(note.id);
+      setShareInfo(existing);
+      if (existing) setShareUrl(`${window.location.origin}/public/notes/${encodeURIComponent(existing.token)}`);
+    } catch (reason) {
+      setShareMessage(reason instanceof Error ? reason.message : "Не удалось загрузить ссылку.");
+    }
+  }
+
+  async function createShareFromDialog() {
+    if (!shareDialogNote) return;
+    const days = Number(shareDuration);
+    const expiresAt = days ? new Date(Date.now() + days * 86_400_000).toISOString() : null;
+    await createPublicLink(shareDialogNote, expiresAt);
+  }
+
+  async function revokeShareFromDialog() {
+    if (!shareDialogNote) return;
+    try {
+      await api.revokeNoteShare(shareDialogNote.id);
+      setShareInfo(null);
+      setShareUrl("");
+      setShareMessage("Публичная ссылка отозвана.");
+    } catch (reason) {
+      setShareMessage(reason instanceof Error ? reason.message : "Не удалось отозвать ссылку.");
+    }
+  }
+
+  function openNoteEditor(note?: Note) {
+    setEditingNote(note ?? null);
+    setEditorTitle(note?.title ?? "");
+    setEditorContent(note?.content_markdown ?? "");
+    setEditorTags(note?.tags.join(", ") ?? "");
+    setEditorError("");
+    setNoteEditorOpen(true);
+  }
+
+  async function saveNoteEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = editorTitle.trim();
+    if (!title) return;
+    setBusy(true);
+    setEditorError("");
+    const tags = editorTags.split(",").map((tag) => tag.trim()).filter(Boolean);
+    try {
+      const saved = editingNote
+        ? await api.updateNote(editingNote, { title, content_markdown: editorContent, tags })
+        : await api.createNote({ title, content_markdown: editorContent, tags });
+      setNotes((current) => editingNote ? current.map((note) => note.id === saved.id ? saved : note) : [saved, ...current]);
+      setNotesLoaded(true);
+      if (selectedNote?.id === saved.id) setSelectedNote(saved);
+      setNoteEditorOpen(false);
+      if (activeView === "graph") setGraph(await api.knowledgeGraph());
+    } catch (reason) {
+      setEditorError(reason instanceof Error ? reason.message : "Не удалось сохранить заметку");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openTask(task: Task) {
+    setSelectedTask(task);
+    setTaskEditorTitle(task.title);
+    setTaskEditorDescription(task.description_markdown);
+    setTaskEditorStatus(task.status);
+    setTaskEditorPriority(task.priority);
+    setTaskEditorProject(task.project_id ?? "");
+    setLinkedNotes([]);
+    try {
+      setLinkedNotes(await api.listTaskNotes(task.id));
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "Не удалось загрузить заметки задачи");
+    }
+  }
+
+  async function saveTaskEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedTask) return;
+    setBusy(true);
+    setDetailError("");
+    try {
+      const updated = await api.updateTask(selectedTask, {
+        title: taskEditorTitle.trim(),
+        description_markdown: taskEditorDescription,
+        status: taskEditorStatus,
+        priority: taskEditorPriority,
+        project_id: taskEditorProject || null,
+      });
+      setSelectedTask(updated);
+      await refreshWorkspace();
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "Не удалось сохранить задачу");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function archiveTaskFromEditor() {
+    if (!selectedTask) return;
+    setBusy(true);
+    setDetailError("");
+    try {
+      await api.updateTask(selectedTask, { archived: true });
+      setSelectedTask(null);
+      await refreshWorkspace();
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "Не удалось архивировать задачу");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openNewLinkedNote() {
+    setNewNoteTitle("");
+    setNewNoteContent("");
+    setNoteCreateOpen(true);
+  }
+
+  async function submitNewLinkedNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedTask) return;
+    setBusy(true);
+    setDetailError("");
+    try {
+      const note = await api.createNote({
+        title: newNoteTitle.trim(),
+        content_markdown: newNoteContent,
+        project_id: selectedTask.project_id,
+      });
+      await api.linkTaskNote(selectedTask.id, note.id);
+      setLinkedNotes((current) => [note, ...current]);
+      setNotesLoaded(false);
+      setNoteCreateOpen(false);
+      if (activeView === "graph") setGraph(await api.knowledgeGraph());
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "Не удалось создать заметку");
     } finally {
       setBusy(false);
     }
@@ -679,8 +1098,11 @@ function App() {
     ? workspace.projects.find((project) => project.id === activeView.slice("project:".length))
     : undefined;
   const now = Date.now();
+  const activeWorkspaceIds = activeProject
+    ? activeProject.parent_id ? new Set([activeProject.id]) : workspaceIds(activeProject.id, workspace.projects)
+    : null;
   const filteredTasks = workspace.tasks.filter((task) => {
-    if (activeProject && task.project_id !== activeProject.id) return false;
+    if (activeWorkspaceIds && (!task.project_id || !activeWorkspaceIds.has(task.project_id))) return false;
     if (!taskFilter) return true;
     if (taskFilter === "overdue") {
       return Boolean(task.due_at && Date.parse(task.due_at) < now && task.status !== "done");
@@ -697,8 +1119,8 @@ function App() {
     .filter(
       (task) => overviewProjectFilter === "all" || task.project_id === overviewProjectFilter,
     );
-  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : `Доброе утро, ${workspace.user.username}`);
-  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
+  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : `Доброе утро, ${workspace.user.username}`);
+  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
 
   return (
     <main className="workspace-layout">
@@ -711,15 +1133,27 @@ function App() {
           <button className={`nav-item ${activeView === "overview" ? "active" : ""}`} type="button" onClick={showOverview}><span>⌂</span> Обзор</button>
           <button className={`nav-item ${activeView === "tasks" ? "active" : ""}`} type="button" onClick={() => showTasks()}><span>✓</span> Мои задачи</button>
           <button className={`nav-item ${activeView === "notes" ? "active" : ""}`} type="button" onClick={showNotes}><span>◇</span> Заметки</button>
+          <button className={`nav-item ${activeView === "graph" ? "active" : ""}`} type="button" onClick={() => void showGraph()}><span>◌</span> Карта знаний</button>
         </nav>
         <p className="nav-title">Проекты</p>
         <nav>
-          {workspace.projects.map((project) => (
-            <button className={`nav-item ${activeProject?.id === project.id ? "active" : ""}`} type="button" key={project.id} onClick={() => showProject(project)}>
-              <span className="project-dot" style={{ background: project.color }} />
-              {project.name}
-            </button>
+          {workspace.projects.filter((project) => !project.parent_id).map((project) => (
+            <div className="workspace-tree" key={project.id}>
+              <div className={`workspace-root-row ${activeProject?.id === project.id ? "active" : ""}`}>
+                <button className="nav-item" type="button" onClick={() => showProject(project)} onContextMenu={(event) => openWorkspaceMenu(event, project)}>
+                  <span className="project-dot" style={{ background: project.color }} />
+                  {project.name}
+                </button>
+                <button className="subspace-add-button" type="button" onClick={() => openWorkspaceCreator(project.id)} title="Создать подпространство" aria-label="Создать подпространство">+</button>
+              </div>
+              {workspace.projects.filter((child) => child.parent_id === project.id).map((child) => (
+                <button className={`nav-item subspace ${activeProject?.id === child.id ? "active" : ""}`} type="button" key={child.id} onClick={() => showProject(child)} onContextMenu={(event) => openWorkspaceMenu(event, child)}>
+                  <span className="subspace-branch">└</span><span className="project-dot" style={{ background: child.color }} />{child.name}
+                </button>
+              ))}
+            </div>
           ))}
+          <button className="new-workspace-button" type="button" onClick={() => openWorkspaceCreator()}>＋ Новое пространство</button>
         </nav>
         <div className="sidebar-footer">
           <div><strong>{workspace.user.username}</strong><span>{api.baseUrl}</span></div>
@@ -727,11 +1161,11 @@ function App() {
         </div>
       </aside>
 
-      <section className="workspace-content">
-        <header className="workspace-header">
+      <section className={`workspace-content ${activeView === "graph" ? "graph-workspace" : ""}`}>
+        {activeView !== "graph" && <header className="workspace-header">
           <div><p className="eyebrow">{viewEyebrow}</p><h1>{viewTitle}</h1></div>
           {activeProject && <button className="primary-button compact" type="button" onClick={openCreateTask}>＋ Новая задача</button>}
-        </header>
+        </header>}
 
         {pageError && <div className="error-message page-error">{pageError}</div>}
 
@@ -767,9 +1201,9 @@ function App() {
                 </div>
               </div>
               {overviewMode === "priority" ? (
-                <PriorityBoard tasks={overviewTasks} projects={workspace.projects} onSelect={setSelectedTask} onDrop={dropPriorityTask} />
+                <PriorityBoard tasks={overviewTasks} projects={workspace.projects} onSelect={openTask} onDrop={dropPriorityTask} />
               ) : (
-                <TimelineView tasks={overviewTasks} projects={workspace.projects} onSelect={setSelectedTask} />
+                <TimelineView tasks={overviewTasks} projects={workspace.projects} onSelect={openTask} />
               )}
             </section>
           </>
@@ -781,19 +1215,20 @@ function App() {
               <div><p className="eyebrow">{taskFilter ? "ФИЛЬТР" : "СПИСОК"}</p><h2>{taskFilter ? (taskFilter === "overdue" ? "Просроченные" : statusLabels[taskFilter]) : "Все задачи"}</h2></div>
               {taskFilter && <button className="text-button" type="button" onClick={() => setTaskFilter(null)}>Сбросить фильтр</button>}
             </div>
-            <TaskList tasks={filteredTasks} onSelect={setSelectedTask} />
+            <TaskList tasks={filteredTasks} onSelect={openTask} />
           </section>
         )}
 
         {activeView === "notes" && (
           <section className="task-section standalone">
+            <div className="notes-actions"><button className="primary-button compact" type="button" onClick={() => openNoteEditor()}>+ Новая заметка</button></div>
             <div className="section-heading"><div><p className="eyebrow">VAULT</p><h2>Все заметки</h2></div><button className="text-button" type="button" onClick={() => void loadNotes(true)}>Обновить</button></div>
             {notesLoading ? <div className="loading-line">Загружаем заметки…</div> : notes.length === 0 ? (
               <div className="empty-state"><span>◇</span><h3>Заметок пока нет</h3><p>Редактор заметок подключим следующим шагом.</p></div>
             ) : (
               <div className="notes-grid">
                 {notes.map((note) => (
-                  <button className="note-card" type="button" key={note.id} onClick={() => void openNote(note)}>
+                  <button className="note-card" type="button" key={note.id} onClick={() => void openNote(note)} onDoubleClick={() => void api.getNote(note.id).then(openNoteEditor)} title="Двойной клик — редактировать">
                     <span className="note-path">{note.path}</span><strong>{note.title}</strong><p>{note.excerpt || "Пустая заметка"}</p>
                   </button>
                 ))}
@@ -801,10 +1236,39 @@ function App() {
             )}
           </section>
         )}
+
+        {activeView === "graph" && (
+          <section className="task-section standalone">
+            {graphLoading ? <div className="loading-line">Строим карту связей…</div> : graph ? (
+              <div className="graph-layout"><KnowledgeGraphView graph={graph} onSelect={setGraphNode} /><aside className="graph-detail-panel">{graphNode ? <><p className="eyebrow">{graphNode.kind === "task" ? "ЗАДАЧА" : "ЗАМЕТКА"}</p><h2>{graphNode.title}</h2><p>{graphNode.subtitle}</p><button className="primary-button compact" type="button" onClick={() => { if (graphNode.kind === "task") { const task = workspace.tasks.find((item) => item.id === graphNode.id); if (task) void openTask(task); } else { void api.getNote(graphNode.id).then(setSelectedNote); } }}>Открыть карточку</button></> : <><p className="eyebrow">НАВИГАЦИЯ</p><h2>Выбери шарик</h2><p>Здесь появится контекст задачи или заметки.</p></>}</aside></div>
+            ) : <div className="empty-state"><span>◌</span><h3>Карта ещё не загружена</h3></div>}
+          </section>
+        )}
       </section>
 
+      {activeView === "graph" && graphNode && (
+        <aside className={`graph-detail-drawer ${resizingGraphDrawer ? "resizing" : ""}`} style={{ width: graphDrawerWidth }} aria-label="Карточка элемента карты">
+          <div className="drawer-resize-handle" role="separator" aria-orientation="vertical" aria-label="Изменить ширину карточки" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setResizingGraphDrawer(true); }} onPointerMove={(event) => { if (resizingGraphDrawer) setGraphDrawerWidth(Math.max(360, Math.min(1000, window.innerWidth - event.clientX))); }} onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); setResizingGraphDrawer(false); }} />
+          <header><div><p className="eyebrow">{graphNode.kind === "note" ? "ЗАМЕТКА" : "ЗАДАЧА"}</p><h2>{graphNode.title}</h2><p>{graphNode.subtitle}</p></div><button className="icon-button light" type="button" onClick={() => setGraphNode(null)}>×</button></header>
+          {graphNode.kind === "note" && graphNote && <div className="graph-share-action"><button className="secondary-button" type="button" onClick={() => openNoteEditor(graphNote)}>✎ Редактировать заметку</button><button className="secondary-button" type="button" onClick={() => void openShareDialog(graphNote)}>↗ Публичный доступ</button>{shareMessage && <p className="share-message">{shareMessage}{shareUrl && <> <a href={shareUrl} target="_blank" rel="noreferrer">Открыть ссылку</a></>}</p>}</div>}
+          {graphNode.kind === "note" ? (
+            graphNote ? <div className="markdown-document graph-document"><MarkdownContent markdown={graphNote.content_markdown} /></div> : <div className="loading-line">Открываем заметку…</div>
+          ) : (
+            <div className="graph-task-summary"><span>Статус</span><strong>{statusLabels[graphNode.status ?? "inbox"]}</strong><span>Описание</span><p>{workspace.tasks.find((task) => task.id === graphNode.id)?.description_markdown || "Описание пока не добавлено."}</p></div>
+          )}
+        </aside>
+      )}
+
+      {workspaceMenu && (
+        <div className="workspace-context-menu" style={{ left: workspaceMenu.x, top: workspaceMenu.y }} role="menu">
+          <p>{workspaceMenu.project.name}</p>
+          <button type="button" role="menuitem" onClick={() => void archiveWorkspace(workspaceMenu.project)}>Удалить пространство</button>
+          <button type="button" role="menuitem" onClick={() => setWorkspaceMenu(null)}>Отмена</button>
+        </div>
+      )}
+
       {selectedTask && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTask(null); }}>
+        <div className="modal-backdrop legacy-task-detail" role="presentation" aria-hidden="true" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTask(null); }}>
           <section className="modal-card detail-card" role="dialog" aria-modal="true" aria-label="Задача">
             <div className="section-heading"><div><p className="eyebrow">{selectedTask.identifier}</p><h2>{selectedTask.title}</h2></div><button className="icon-button light" type="button" onClick={() => setSelectedTask(null)}>×</button></div>
             <div className="detail-meta">
@@ -814,6 +1278,10 @@ function App() {
               <div><span>Дедлайн</span><strong>{selectedTask.source_data.deadline_start ? `${formatDueDate(String(selectedTask.source_data.deadline_start))} → ${formatDueDate(selectedTask.due_at)}` : formatDueDate(selectedTask.due_at)}</strong></div>
             </div>
             <div className="detail-description"><span>Описание</span><p>{selectedTask.description_markdown || "Описание не добавлено."}</p></div>
+            <div className="linked-notes-section">
+              <div className="section-heading"><div><p className="eyebrow">КОНТЕКСТ</p><h3>Связанные заметки</h3></div><button className="text-button" type="button" onClick={openNewLinkedNote}>＋ Добавить</button></div>
+              {linkedNotes.length ? <div className="linked-note-list">{linkedNotes.map((note) => <button type="button" key={note.id} onClick={() => void openNote(note)}><span>◇</span><div><strong>{note.title}</strong><small>{note.excerpt || note.path}</small></div></button>)}</div> : <p className="muted">Добавь заметку с идеей, решением или материалами по этой задаче.</p>}
+            </div>
             {detailError && <div className="error-message">{detailError}</div>}
           </section>
         </div>
@@ -848,8 +1316,90 @@ function App() {
           </form>
         </div>
       )}
+
+      {noteCreateOpen && selectedTask && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNoteCreateOpen(false); }}>
+          <form className="modal-card detail-card" role="dialog" aria-modal="true" aria-label="Новая заметка" onSubmit={submitNewLinkedNote}>
+            <div className="section-heading"><div><p className="eyebrow">К ЗАДАЧЕ {selectedTask.identifier}</p><h2>Новая заметка</h2></div><button className="icon-button light" type="button" onClick={() => setNoteCreateOpen(false)}>×</button></div>
+            <label>Название<input autoFocus value={newNoteTitle} onChange={(event) => setNewNoteTitle(event.currentTarget.value)} maxLength={240} required /></label>
+            <label>Содержание<textarea value={newNoteContent} onChange={(event) => setNewNoteContent(event.currentTarget.value)} placeholder="Markdown поддерживается" rows={10} /></label>
+            <div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setNoteCreateOpen(false)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Сохраняем…" : "Создать и связать"}</button></div>
+          </form>
+        </div>
+      )}
+      {selectedNote && (
+        <div className="modal-backdrop markdown-reader-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedNote(null); }}>
+          <article className="markdown-reader" role="dialog" aria-modal="true" aria-label="Документ">
+            <header className="markdown-reader-header"><div><p className="eyebrow">ЗАМЕТКА</p><h1>{selectedNote.title}</h1></div><div className="reader-actions"><button className="icon-button light" type="button" onClick={() => openNoteEditor(selectedNote)} title="Редактировать заметку" aria-label="Редактировать заметку">✎</button><button className="icon-button light" type="button" onClick={() => void openShareDialog(selectedNote)} title="Публичный доступ" aria-label="Публичный доступ">↗</button><button className="icon-button light" type="button" onClick={() => setSelectedNote(null)}>×</button></div></header>
+            {shareMessage && <p className="share-message">{shareMessage}{shareUrl && <> <a href={shareUrl} target="_blank" rel="noreferrer">Открыть ссылку</a></>}</p>}
+            <div className="markdown-document"><MarkdownContent markdown={selectedNote.content_markdown} /></div>
+          </article>
+        </div>
+      )}
+
+      {noteEditorOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNoteEditorOpen(false); }}>
+          <form className="modal-card note-editor-card" role="dialog" aria-modal="true" aria-label="Редактор заметки" onSubmit={saveNoteEditor}>
+            <div className="section-heading"><div><p className="eyebrow">{editingNote ? "РЕДАКТИРОВАНИЕ" : "НОВАЯ ЗАМЕТКА"}</p><h2>{editingNote ? "Обновить заметку" : "Создать заметку"}</h2></div><button className="icon-button light" type="button" onClick={() => setNoteEditorOpen(false)}>×</button></div>
+            <label>Название<input autoFocus value={editorTitle} onChange={(event) => setEditorTitle(event.currentTarget.value)} maxLength={240} placeholder="Например, план запуска" required /></label>
+            <label>Теги <span className="field-hint">через запятую</span><input value={editorTags} onChange={(event) => setEditorTags(event.currentTarget.value)} placeholder="идеи, работа, исследование" /></label>
+            <label className="editor-field">Текст <span className="field-hint">Markdown: # заголовок, **жирный**, [[ссылка на заметку]]</span><textarea value={editorContent} onChange={(event) => setEditorContent(event.currentTarget.value)} placeholder="# Новая заметка&#10;&#10;Запиши мысль, решение или полезный контекст…" rows={16} /></label>
+            {editorError && <div className="error-message">{editorError}</div>}
+            <div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setNoteEditorOpen(false)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Сохраняем…" : "Сохранить заметку"}</button></div>
+          </form>
+        </div>
+      )}
+      {selectedTask && (
+        <div className="modal-backdrop task-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTask(null); }}>
+          <form className="modal-card task-editor-card" role="dialog" aria-modal="true" aria-label="Задача" onSubmit={saveTaskEditor}>
+            <div className="section-heading"><div><p className="eyebrow">УПРАВЛЕНИЕ ЗАДАЧЕЙ</p><h2>Настройки задачи</h2></div><button className="icon-button light" type="button" onClick={() => setSelectedTask(null)}>×</button></div>
+            <label>Название<input autoFocus value={taskEditorTitle} onChange={(event) => setTaskEditorTitle(event.currentTarget.value)} maxLength={300} required /></label>
+            <label>Описание<textarea value={taskEditorDescription} onChange={(event) => setTaskEditorDescription(event.currentTarget.value)} placeholder="Что нужно сделать и какой результат ожидается" rows={7} /></label>
+            <div className="task-editor-grid">
+              <label>Статус<select value={taskEditorStatus} onChange={(event) => setTaskEditorStatus(event.currentTarget.value as TaskStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+              <label>Приоритет<select value={taskEditorPriority} onChange={(event) => setTaskEditorPriority(Number(event.currentTarget.value))}>{priorityColumns.map((priority) => <option value={priority.value} key={priority.value}>{priority.label}</option>)}</select></label>
+            </div>
+            <label>Рабочее пространство<select value={taskEditorProject} onChange={(event) => setTaskEditorProject(event.currentTarget.value)}><option value="">Без пространства</option>{workspace.projects.map((project) => <option value={project.id} key={project.id}>{project.parent_id ? `↳ ${project.name}` : project.name}</option>)}</select></label>
+            {detailError && <div className="error-message">{detailError}</div>}
+            <div className="task-editor-actions"><button className="danger-button" type="button" onClick={() => void archiveTaskFromEditor()} disabled={busy}>Архивировать</button><div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setSelectedTask(null)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Сохраняем…" : "Сохранить"}</button></div></div>
+          </form>
+        </div>
+      )}
+
+      {workspaceCreateOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkspaceCreateOpen(false); }}>
+          <form className="modal-card workspace-create-card" role="dialog" aria-modal="true" aria-label="Новое рабочее пространство" onSubmit={submitWorkspace}>
+            <div className="section-heading"><div><p className="eyebrow">СТРУКТУРА РАБОТЫ</p><h2>{workspaceParent ? "Новое подпространство" : "Новое пространство"}</h2></div><button className="icon-button light" type="button" onClick={() => setWorkspaceCreateOpen(false)}>×</button></div>
+            <p className="muted">{workspaceParent ? "Оно будет создано внутри выбранного пространства." : "Верхнее пространство объединяет задачи всех своих подпространств."}</p>
+            <label>Название<input autoFocus value={workspaceName} onChange={(event) => setWorkspaceName(event.currentTarget.value)} maxLength={160} placeholder="Например, Маркетинг" required /></label>
+            {workspaceError && <div className="error-message">{workspaceError}</div>}
+            <div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setWorkspaceCreateOpen(false)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Создаём…" : "Создать пространство"}</button></div>
+          </form>
+        </div>
+      )}
+      {shareDialogNote && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShareDialogNote(null); }}>
+          <section className="modal-card share-dialog" role="dialog" aria-modal="true" aria-label="Публичный доступ к заметке">
+            <div className="section-heading"><div><p className="eyebrow">ПУБЛИЧНЫЙ ДОСТУП</p><h2>Ссылка на заметку</h2></div><button className="icon-button light" type="button" onClick={() => setShareDialogNote(null)}>×</button></div>
+            <p className="muted">Любой, у кого есть ссылка, сможет читать «{shareDialogNote.title}» без входа в аккаунт.</p>
+            <label>Срок действия
+              <select value={shareDuration} onChange={(event) => setShareDuration(event.currentTarget.value)}>
+                <option value="1">1 день</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="0">Без срока</option>
+              </select>
+            </label>
+            {shareInfo && shareUrl ? <div className="share-link"><strong>{shareInfo.expires_at ? `Доступ до ${new Date(shareInfo.expires_at).toLocaleString("ru-RU")}` : "Доступ без срока"}</strong><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a></div> : <p className="muted">Публичная ссылка ещё не создана.</p>}
+            {shareMessage && <p className="share-message">{shareMessage}</p>}
+            <div className="modal-actions share-actions"><button className="secondary-button padded" type="button" onClick={() => setShareDialogNote(null)}>Готово</button>{shareInfo && <button className="danger-button" type="button" onClick={() => void revokeShareFromDialog()}>Отозвать ссылку</button>}<button className="primary-button" type="button" onClick={() => void createShareFromDialog()}>{shareInfo ? "Обновить срок" : "Создать ссылку"}</button></div>
+          </section>
+        </div>
+      )}
     </main>
   );
+}
+
+function App() {
+  const match = window.location.pathname.match(/^\/public\/notes\/([^/]+)$/);
+  return match ? <PublicNotePage token={decodeURIComponent(match[1])} /> : <WorkspaceApp />;
 }
 
 export default App;
