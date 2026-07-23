@@ -54,6 +54,30 @@ def test_note_roundtrip_links_and_sync_conflict(
     assert ".conflict-workstation-" in sync.json()["conflict"]["path"]
 
 
+def test_public_note_page_exposes_server_rendered_open_graph_metadata(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    created = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={
+            "title": "Plan <Q3>",
+            "content_markdown": "# План\nПодготовить & согласовать запуск.",
+        },
+    )
+    assert created.status_code == 201, created.text
+    share = client.post(f"/api/v1/notes/{created.json()['id']}/share", headers=auth_headers, json={})
+    assert share.status_code == 200, share.text
+
+    response = client.get(f"/public/notes/{share.json()['token']}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<title>Plan &lt;Q3&gt; — Taskman</title>" in response.text
+    assert '<meta property="og:title" content="Plan &lt;Q3&gt;">' in response.text
+    assert 'content="План Подготовить &amp; согласовать запуск."' in response.text
+
+
 def test_vault_rejects_path_traversal(client: TestClient, auth_headers: dict[str, str]) -> None:
     response = client.post(
         "/api/v1/notes",

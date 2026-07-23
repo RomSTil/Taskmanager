@@ -236,6 +236,11 @@ def revoke_note_share(
 
 @router.get("/public/notes/{token}", response_model=PublicNoteRead)
 def read_public_note(token: str, session: Annotated[Session, Depends(get_session)]) -> PublicNoteRead:
+    return get_public_note(session, token)
+
+
+def get_public_note(session: Session, token: str) -> PublicNoteRead:
+    """Return a shared note after checking that its link is still valid."""
     share = session.scalar(select(NoteShare).where(NoteShare.token == token))
     if not share or share.revoked_at or _share_expired(share):
         raise HTTPException(status_code=404, detail="Public note not found")

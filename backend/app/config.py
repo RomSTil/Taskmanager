@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     max_attachment_mb: int = 25
     telegram_poll_seconds: float = 1.0
     telegram_polling_enabled: bool = False
+    ai_enabled: bool = False
+    ai_api_key: str | None = None
+    ai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(
         env_file=("../.env", ".env"),

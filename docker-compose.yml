@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-taskman}
       POSTGRES_USER: ${POSTGRES_USER:-taskman}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_HOST_AUTH_METHOD: ${POSTGRES_HOST_AUTH_METHOD:-trust}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -66,7 +66,6 @@ services:
       PGHOST: db
       PGDATABASE: ${POSTGRES_DB:-taskman}
       PGUSER: ${POSTGRES_USER:-taskman}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
     volumes:
       - vault_data:/data/vault:ro

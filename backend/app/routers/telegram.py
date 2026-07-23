@@ -118,6 +118,50 @@ def _queue(session: Session, bot: BotConfig, chat_id: int, text: str, reply_mark
     session.add(OutboxMessage(bot_id=bot.id, chat_id=chat_id, payload=payload))
 
 
+def _ai_enabled() -> bool:
+    settings = get_settings()
+    return settings.ai_enabled and bool(settings.ai_api_key)
+
+
+def _ai_response(text: str) -> str | None:
+    settings = get_settings()
+    if not _ai_enabled():
+        return None
+    prompt = (
+        "Ты личный ассистент внутри Taskman Telegram. "
+        "Отвечай кратко, по-русски, без воды. "
+        "Если текст похож на задачу, верни:\n"
+        "Задача: ...\nСледующий шаг: ...\nСрок: ...\n"
+        "Если это заметка, верни:\n"
+        "Заметка: ...\nКлючевые пункты: ...\n"
+        "Если неясно, задай один уточняющий вопрос."
+    )
+    with httpx.Client(timeout=30) as client:
+        response = client.post(
+            f"{settings.ai_base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.ai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.ai_model,
+                "messages": [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": text[:6000]},
+                ],
+                "temperature": 0.2,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        choices = payload.get("choices") or []
+        if not choices:
+            return None
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        return str(content).strip() if content else None
+
+
 def _task_buttons(task: Task) -> dict[str, Any]:
     return {
         "inline_keyboard": [
@@ -190,14 +234,29 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
     command, _, argument = text.partition(" ")
     command = command.split("@")[0].lower()
     if command in {"/start", "/help"}:
-        _queue(
-            session,
-            bot,
-            chat_id,
-            "<b>Taskman</b>\nОбычный текст или /new — новый тикет.\n"
-            "/tasks [status], /search текст, /status ID status, /priority ID 0-3, "
+        help_text = "\n".join([
+            "<b>Taskman</b>",
+            "Обычный текст или /new — новый тикет.",
+            "/tasks [status], /search текст, /status ID status, /priority ID 0-3,",
             "/due ID YYYY-MM-DD, /project ID KEY, /comment ID текст",
-        )
+            "/ai текст — AI-вывод или короткая формулировка.",
+        ])
+        _queue(session, bot, chat_id, help_text)
+        return
+    if command == "/ai":
+        if not argument.strip():
+            _queue(session, bot, chat_id, "????? /ai ????? ?????.")
+            return
+        try:
+            ai_text = _ai_response(argument.strip())
+        except (httpx.HTTPError, RuntimeError) as exc:
+            bot.last_error = str(exc)[:1000]
+            _queue(session, bot, chat_id, "AI ???????? ??????????.")
+            return
+        if not ai_text:
+            _queue(session, bot, chat_id, "AI ?? ?????? ?????.")
+            return
+        _queue(session, bot, chat_id, ai_text)
         return
     if command in {"/tasks", "/search"}:
         query = select(Task).options(selectinload(Task.project)).where(Task.archived_at.is_(None))
