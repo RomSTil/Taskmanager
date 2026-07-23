@@ -4,7 +4,7 @@ Revision ID: 0002
 Revises: 0001
 """
 from alembic import op
-from sqlalchemy import Column, ForeignKey, String, inspect
+from sqlalchemy import Column, String, inspect
 
 
 revision = "0002"

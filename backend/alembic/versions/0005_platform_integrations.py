@@ -1,7 +1,7 @@
 """Event bus, Yandex Direct provider and MAX transport.
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: 0005
+Revises: 0004
 """
 from alembic import op
 
@@ -19,8 +19,8 @@ from app.modules.integrations.yandex_direct.models import (
 )
 
 
-revision = "0002"
-down_revision = "0001"
+revision = "0005"
+down_revision = "0004"
 branch_labels = None
 depends_on = None
 
