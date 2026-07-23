@@ -10,6 +10,9 @@ import type {
   TaskStatus,
   TokenPair,
   WorkspaceBootstrap,
+  DirectAccount,
+  MaxBot,
+  MaxBotCreated,
 } from "./types";
 
 const API_URL_KEY = "taskman.apiUrl";
@@ -264,5 +267,43 @@ export class TaskmanApi {
 
   knowledgeGraph(): Promise<KnowledgeGraph> {
     return this.request<KnowledgeGraph>("/knowledge-graph", {}, true);
+  }
+
+  listDirectAccounts(): Promise<DirectAccount[]> {
+    return this.request<DirectAccount[]>("/integrations/yandex-direct/accounts", {}, true);
+  }
+
+  createDirectAccount(input: {
+    name: string;
+    token: string;
+    client_login?: string;
+    balance_threshold: number;
+    days_left_threshold: number;
+    anomaly_ratio: number;
+    monitor_interval_minutes: number;
+  }): Promise<DirectAccount> {
+    return this.request<DirectAccount>("/integrations/yandex-direct/accounts", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }, true);
+  }
+
+  listMaxBots(): Promise<MaxBot[]> {
+    return this.request<MaxBot[]>("/integrations/max/bots", {}, true);
+  }
+
+  createMaxBot(input: { name: string; token: string; allowlist: number[] }): Promise<MaxBotCreated> {
+    return this.request<MaxBotCreated>("/integrations/max/bots", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }, true);
+  }
+
+  registerMaxWebhook(botId: string): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/integrations/max/bots/${encodeURIComponent(botId)}/register-webhook`,
+      { method: "POST" },
+      true,
+    );
   }
 }

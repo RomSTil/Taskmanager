@@ -155,3 +155,39 @@ export interface KnowledgeGraph {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
 }
+
+export interface DirectAccount {
+  id: string;
+  name: string;
+  client_login: string | null;
+  token_hint: string;
+  enabled: boolean;
+  balance_threshold: string | number;
+  days_left_threshold: string | number;
+  anomaly_ratio: string | number;
+  monitor_interval_minutes: number;
+  last_checked_at: string | null;
+  last_error: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaxBot {
+  id: string;
+  name: string;
+  token_hint: string;
+  allowlist: number[];
+  target_type: string | null;
+  target_id: number | null;
+  enabled: boolean;
+  last_error: string | null;
+  version: number;
+  webhook_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaxBotCreated extends MaxBot {
+  webhook_secret: string;
+}

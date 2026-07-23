@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ApiError, clearSession, getSavedApiUrl, getSession, TaskmanApi } from "./api";
+import IntegrationsView from "./IntegrationsView";
 import type {
   Dashboard,
   KnowledgeGraph,
@@ -35,14 +36,14 @@ import type {
 import "./App.css";
 
 type Phase = "checking" | "auth" | "workspace";
-type ActiveView = "overview" | "tasks" | "notes" | "graph" | `project:${string}`;
+type ActiveView = "overview" | "tasks" | "notes" | "graph" | "integrations" | `project:${string}`;
 
 const ACTIVE_VIEW_KEY = "taskman.active-view";
 
 function readActiveView(): ActiveView {
   try {
     const saved = localStorage.getItem(ACTIVE_VIEW_KEY);
-    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved?.startsWith("project:")) {
+    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved === "integrations" || saved?.startsWith("project:")) {
       return saved as ActiveView;
     }
   } catch {
@@ -1119,8 +1120,8 @@ function WorkspaceApp() {
     .filter(
       (task) => overviewProjectFilter === "all" || task.project_id === overviewProjectFilter,
     );
-  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : `Доброе утро, ${workspace.user.username}`);
-  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
+  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : activeView === "integrations" ? "Интеграции" : `Доброе утро, ${workspace.user.username}`);
+  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "integrations" ? "ЯНДЕКС ДИРЕКТ · MAX" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
 
   return (
     <main className="workspace-layout">
@@ -1155,6 +1156,7 @@ function WorkspaceApp() {
           ))}
           <button className="new-workspace-button" type="button" onClick={() => openWorkspaceCreator()}>＋ Новое пространство</button>
         </nav>
+        <button className={`nav-item ${activeView === "integrations" ? "active" : ""}`} type="button" onClick={() => setActiveView("integrations")}><span>↗</span> Интеграции</button>
         <div className="sidebar-footer">
           <div><strong>{workspace.user.username}</strong><span>{api.baseUrl}</span></div>
           <button className="icon-button" type="button" onClick={logout} title="Выйти">↪</button>
@@ -1236,6 +1238,8 @@ function WorkspaceApp() {
             )}
           </section>
         )}
+
+        {activeView === "integrations" && <IntegrationsView api={api} />}
 
         {activeView === "graph" && (
           <section className="task-section standalone">
