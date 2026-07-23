@@ -5,7 +5,7 @@ description = "Global API and integration worker for Taskman"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14,<2",
-  "cryptography>=44,<46",
+  "cryptography>=48.0.1,<49",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
@@ -20,7 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
+  "bandit>=1.8,<2",
+  "pip-audit>=2.10,<3",
+  "pytest>=9.0.3,<10",
   "pytest-cov>=6,<7",
   "ruff>=0.9,<1",
 ]
@@ -28,6 +30,7 @@ dev = [
 [project.scripts]
 taskman-api = "app.main:run"
 taskman-telegram-worker = "app.integrations.telegram_worker:main"
+taskman-platform-worker = "app.integrations.platform_worker:main"
 
 [build-system]
 requires = ["hatchling"]

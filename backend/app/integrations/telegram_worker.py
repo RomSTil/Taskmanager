@@ -45,7 +45,7 @@ def deliver_batch() -> int:
                 delivered += 1
             except (httpx.HTTPError, RuntimeError) as exc:
                 message.attempts += 1
-                message.last_error = str(exc)[:1000]
+                message.last_error = f"Delivery failed ({type(exc).__name__})"
                 delay = min(3600, 2 ** min(message.attempts, 10))
                 message.available_at = datetime.now(UTC) + timedelta(seconds=delay)
         session.commit()

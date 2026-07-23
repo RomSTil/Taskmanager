@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9"]
+dev = ["pytest>=9.0.3,<10"]
 
 [project.scripts]
 taskman-mcp = "taskman_mcp.cli:main"

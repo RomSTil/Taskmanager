@@ -31,6 +31,24 @@ function normalizeUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+export function validateBackendUrl(value: string): string {
+  const normalized = normalizeUrl(value);
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new ApiError("Некорректный адрес backend", 0);
+  }
+  if (parsed.username || parsed.password) {
+    throw new ApiError("Адрес backend не должен содержать логин или пароль", 0);
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
+    throw new ApiError("Для удалённого backend требуется HTTPS", 0);
+  }
+  return normalized;
+}
+
 function readError(payload: unknown, fallback: string): string {
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = (payload as { detail: unknown }).detail;
@@ -66,7 +84,7 @@ export class TaskmanApi {
   }
 
   saveUrl(): void {
-    localStorage.setItem(API_URL_KEY, this.baseUrl);
+    localStorage.setItem(API_URL_KEY, validateBackendUrl(this.baseUrl));
   }
 
   private async request<T>(path: string, init: RequestInit = {}, authenticated = false): Promise<T> {
@@ -81,8 +99,10 @@ export class TaskmanApi {
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/api/v1${path}`, { ...init, headers });
-    } catch {
+      const baseUrl = validateBackendUrl(this.baseUrl);
+      response = await fetch(`${baseUrl}/api/v1${path}`, { ...init, headers });
+    } catch (reason) {
+      if (reason instanceof ApiError) throw reason;
       throw new ApiError("Сервер недоступен. Проверьте адрес и запустите backend.", 0);
     }
 

@@ -1,6 +1,7 @@
 import hashlib
 import re
 import secrets
+import uuid
 from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import Annotated
@@ -34,8 +35,9 @@ from ..services.vault import (
     create_conflict,
     delete_note,
     note_default_path,
+    normalize_path_key,
     read_note,
-    safe_note_path,
+    safe_asset_path,
     search_notes,
     write_note,
 )
@@ -44,8 +46,17 @@ from ..services.vault import (
 router = APIRouter(tags=["knowledge"])
 
 
-def _note(session: Session, note_id: str, include_deleted: bool = False) -> NoteIndex:
-    note = session.get(NoteIndex, note_id)
+def _note(
+    session: Session,
+    note_id: str,
+    include_deleted: bool = False,
+    *,
+    for_update: bool = False,
+) -> NoteIndex:
+    query = select(NoteIndex).where(NoteIndex.id == note_id)
+    if for_update:
+        query = query.with_for_update()
+    note = session.scalar(query)
     if not note or (note.deleted_at and not include_deleted):
         raise HTTPException(status_code=404, detail="Note not found")
     return note
@@ -113,7 +124,7 @@ def _project_key(session: Session, project_id: str | None) -> str | None:
 
 @router.get("/search", response_model=SearchRead)
 def global_search(
-    query: str,
+    query: Annotated[str, Query(min_length=1, max_length=200)],
     _: Annotated[Principal, Security(get_principal, scopes=["tasks:read", "notes:read"])],
     session: Annotated[Session, Depends(get_session)],
     limit: int = Query(default=50, ge=1, le=100),
@@ -139,7 +150,7 @@ def list_notes(
     _: Annotated[Principal, Security(get_principal, scopes=["notes:read"])],
     session: Annotated[Session, Depends(get_session)],
     project_id: str | None = None,
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
     include_deleted: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
 ) -> list[NoteIndex]:
@@ -255,7 +266,7 @@ def update_note(
     _: Annotated[Principal, Security(get_principal, scopes=["notes:write"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> NoteRead:
-    current = _note(session, note_id)
+    current = _note(session, note_id, for_update=True)
     project_id = payload.project_id if "project_id" in payload.model_fields_set else current.project_id
     _project_key(session, project_id)
     note, rendered = write_note(
@@ -281,7 +292,7 @@ def archive_note(
     _: Annotated[Principal, Security(get_principal, scopes=["notes:write"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> None:
-    note = _note(session, note_id)
+    note = _note(session, note_id, for_update=True)
     if note.revision != base_revision:
         raise HTTPException(status_code=409, detail={"current_revision": note.revision})
     delete_note(session, note)
@@ -331,9 +342,14 @@ def sync_push(
             note=_read(note) if note and not note.deleted_at else None,
             conflict=_read(conflict) if conflict else None,
         )
-    current = session.get(NoteIndex, payload.id) if payload.id else session.scalar(
-        select(NoteIndex).where(NoteIndex.path_key == payload.path.replace("\\", "/").casefold())
+    current_query = (
+        select(NoteIndex).where(NoteIndex.id == payload.id)
+        if payload.id
+        else select(NoteIndex).where(
+            NoteIndex.path_key == normalize_path_key(payload.path)
+        )
     )
+    current = session.scalar(current_query.with_for_update())
     if payload.deleted:
         if not current:
             result = SyncResult(status="applied")
@@ -413,20 +429,20 @@ async def upload_attachment(
     if len(content) > get_settings().max_attachment_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Attachment is too large")
     safe_name = re.sub(r"[^\w.() -]", "_", PurePath(upload.filename or "attachment").name)
+    safe_name = safe_name.strip(" .")[:240] or "attachment"
     relative = f"_assets/{note.id}/{safe_name}"
-    _, absolute = safe_note_path(relative + ".md")
-    absolute = absolute.with_suffix("")
+    _, absolute = safe_asset_path(relative)
     absolute.parent.mkdir(parents=True, exist_ok=True)
     if absolute.exists():
-        safe_name = f"{hashlib.sha256(content).hexdigest()[:8]}-{safe_name}"
+        safe_name = f"{uuid.uuid4().hex[:12]}-{safe_name[:227]}"
         relative = f"_assets/{note.id}/{safe_name}"
-        absolute = absolute.parent / safe_name
+        _, absolute = safe_asset_path(relative)
     absolute.write_bytes(content)
     attachment = Attachment(
         note_id=note.id,
         path=relative,
         filename=safe_name,
-        content_type=upload.content_type or "application/octet-stream",
+        content_type=(upload.content_type or "application/octet-stream")[:160],
         size_bytes=len(content),
         content_hash=hashlib.sha256(content).hexdigest(),
     )

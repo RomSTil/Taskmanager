@@ -45,8 +45,11 @@ from ..schemas import (
 router = APIRouter(tags=["work"])
 
 
-def _project(session: Session, project_id: str) -> Project:
-    item = session.get(Project, project_id)
+def _project(session: Session, project_id: str, *, for_update: bool = False) -> Project:
+    query = select(Project).where(Project.id == project_id)
+    if for_update:
+        query = query.with_for_update()
+    item = session.scalar(query)
     if not item:
         raise HTTPException(status_code=404, detail="Project not found")
     return item
@@ -66,12 +69,15 @@ def _generated_project_key(session: Session, name: str) -> str:
     return candidate
 
 
-def _task(session: Session, task_id: str) -> Task:
-    item = session.scalar(
+def _task(session: Session, task_id: str, *, for_update: bool = False) -> Task:
+    query = (
         select(Task)
         .options(selectinload(Task.project), selectinload(Task.checklist), selectinload(Task.comments))
         .where(Task.id == task_id)
     )
+    if for_update:
+        query = query.with_for_update()
+    item = session.scalar(query)
     if not item:
         raise HTTPException(status_code=404, detail="Task not found")
     return item
@@ -88,12 +94,27 @@ def _check_version(current: int, base: int) -> None:
 def _duplicate_operation(session: Session, operation_id: str | None, entity_type: str):
     if not operation_id:
         return None
-    return session.scalar(
-        select(OperationLog).where(
-            OperationLog.operation_id == operation_id,
-            OperationLog.entity_type == entity_type,
-        )
-    )
+    operation = session.get(OperationLog, operation_id)
+    if operation and operation.entity_type != entity_type:
+        raise HTTPException(status_code=409, detail="Operation ID was already used")
+    return operation
+
+
+def _validate_parent(session: Session, task: Task, parent_id: str | None, project_id: str | None) -> None:
+    if not parent_id:
+        return
+    if parent_id == task.id:
+        raise HTTPException(status_code=422, detail="Task cannot be its own parent")
+    parent = _task(session, parent_id)
+    if parent.project_id != project_id:
+        raise HTTPException(status_code=422, detail="Parent task must belong to the same project")
+    seen = {task.id}
+    current: Task | None = parent
+    while current:
+        if current.id in seen:
+            raise HTTPException(status_code=422, detail="Task hierarchy cannot contain a cycle")
+        seen.add(current.id)
+        current = session.get(Task, current.parent_id) if current.parent_id else None
 
 
 def _dashboard(session: Session) -> DashboardRead:
@@ -198,7 +219,7 @@ def update_project(
     _: Annotated[Principal, Security(get_principal, scopes=["projects:write"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> Project:
-    project = _project(session, project_id)
+    project = _project(session, project_id, for_update=True)
     _check_version(project.version, payload.base_version)
     changes = payload.model_dump(exclude_unset=True, exclude={"base_version", "archived"})
     if "parent_id" in changes and changes["parent_id"]:
@@ -238,7 +259,7 @@ def list_tasks(
     project_id: str | None = None,
     task_status: TaskStatus | None = Query(default=None, alias="status"),
     parent_id: str | None = None,
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
     include_archived: bool = False,
     limit: int = Query(default=200, ge=1, le=500),
 ) -> list[Task]:
@@ -267,7 +288,9 @@ def create_task(
     payload: TaskCreate,
     principal: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
     session: Annotated[Session, Depends(get_session)],
-    operation_id: Annotated[str | None, Header(alias="X-Operation-Id")] = None,
+    operation_id: Annotated[
+        str | None, Header(alias="X-Operation-Id", min_length=8, max_length=80)
+    ] = None,
 ) -> Task:
     duplicate = _duplicate_operation(session, operation_id, "task.create")
     if duplicate and duplicate.entity_id:
@@ -275,7 +298,11 @@ def create_task(
     if payload.project_id:
         _project(session, payload.project_id)
     if payload.parent_id:
-        _task(session, payload.parent_id)
+        parent = _task(session, payload.parent_id)
+        if parent.project_id != payload.project_id:
+            raise HTTPException(
+                status_code=422, detail="Parent task must belong to the same project"
+            )
     sequence = None
     if payload.project_id:
         session.execute(select(Project.id).where(Project.id == payload.project_id).with_for_update())
@@ -371,20 +398,32 @@ def update_task(
     payload: TaskUpdate,
     _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
     session: Annotated[Session, Depends(get_session)],
-    operation_id: Annotated[str | None, Header(alias="X-Operation-Id")] = None,
+    operation_id: Annotated[
+        str | None, Header(alias="X-Operation-Id", min_length=8, max_length=80)
+    ] = None,
 ) -> Task:
     duplicate = _duplicate_operation(session, operation_id, "task.update")
-    if duplicate:
-        return _task(session, task_id)
-    task = _task(session, task_id)
+    if duplicate and duplicate.entity_id:
+        return _task(session, duplicate.entity_id)
+    task = _task(session, task_id, for_update=True)
     _check_version(task.version, payload.base_version)
     changes = payload.model_dump(exclude_unset=True, exclude={"base_version", "archived"})
-    if "project_id" in changes and changes["project_id"]:
-        _project(session, changes["project_id"])
-    if "parent_id" in changes and changes["parent_id"]:
-        if changes["parent_id"] == task.id:
-            raise HTTPException(status_code=422, detail="Task cannot be its own parent")
-        _task(session, changes["parent_id"])
+    target_project_id = changes.get("project_id", task.project_id)
+    target_parent_id = changes.get("parent_id", task.parent_id)
+    if target_project_id:
+        _project(session, target_project_id)
+    _validate_parent(session, task, target_parent_id, target_project_id)
+    if "project_id" in changes and changes["project_id"] != task.project_id:
+        if target_project_id:
+            _project(session, target_project_id, for_update=True)
+            task.sequence = (
+                session.scalar(
+                    select(func.max(Task.sequence)).where(Task.project_id == target_project_id)
+                )
+                or 0
+            ) + 1
+        else:
+            task.sequence = None
     for key, value in changes.items():
         setattr(task, key, value)
     if payload.status is not None:
@@ -394,7 +433,11 @@ def update_task(
     task.version += 1
     if operation_id:
         session.add(OperationLog(operation_id=operation_id, entity_type="task.update", entity_id=task.id))
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Task update conflicts with current data") from exc
     return _task(session, task.id)
 
 
@@ -437,7 +480,9 @@ def update_checklist_item(
     _: Annotated[Principal, Security(get_principal, scopes=["tasks:write"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> ChecklistItem:
-    item = session.get(ChecklistItem, item_id)
+    item = session.scalar(
+        select(ChecklistItem).where(ChecklistItem.id == item_id).with_for_update()
+    )
     if not item:
         raise HTTPException(status_code=404, detail="Checklist item not found")
     _check_version(item.version, payload.base_version)
@@ -465,7 +510,11 @@ def create_view(
 ) -> SavedView:
     view = SavedView(**payload.model_dump())
     session.add(view)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Saved view name already exists") from exc
     session.refresh(view)
     return view
 

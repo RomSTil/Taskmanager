@@ -42,6 +42,17 @@ services:
     volumes:
       - vault_data:/data/vault
 
+  platform-worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.integrations.platform_worker"]
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - vault_data:/data/vault
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

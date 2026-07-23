@@ -22,6 +22,12 @@ def override_session() -> Generator[Session, None, None]:
         yield session
 
 
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    with TestingSession() as session:
+        yield session
+
+
 @pytest.fixture(autouse=True)
 def clean_database(tmp_path: Path) -> Generator[None, None, None]:
     get_settings().vault_path = tmp_path / "vault"

@@ -1,6 +1,10 @@
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import OutboxMessage
 
 from app.routers.telegram import _message_kind, _steps_from_text
 
@@ -61,10 +65,46 @@ def test_vault_rejects_path_traversal(client: TestClient, auth_headers: dict[str
         json={"title": "Escape", "path": "../escape.md", "content_markdown": "no"},
     )
     assert response.status_code == 422
+    reserved = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "Internal", "path": ".taskman/config.md", "content_markdown": "no"},
+    )
+    assert reserved.status_code == 422
+
+
+def test_note_move_does_not_overwrite_another_vault_file(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    first = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "First", "path": "Inbox/First.md", "content_markdown": "first"},
+    ).json()
+    second = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "Second", "path": "Inbox/Second.md", "content_markdown": "second"},
+    ).json()
+
+    collision = client.patch(
+        f"/api/v1/notes/{first['id']}",
+        headers=auth_headers,
+        json={
+            "base_revision": first["revision"],
+            "path": second["path"],
+            "content_markdown": "overwrite attempt",
+        },
+    )
+
+    assert collision.status_code == 409
+    unchanged = client.get(f"/api/v1/notes/{second['id']}", headers=auth_headers).json()
+    assert "second" in unchanged["content_markdown"]
+    assert "overwrite attempt" not in unchanged["content_markdown"]
 
 
 def test_telegram_webhook_allowlist_and_idempotency(
-    client: TestClient, auth_headers: dict[str, str]
+    client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
     created = client.post(
         "/api/v1/integrations/telegram/bots",
@@ -84,11 +124,14 @@ def test_telegram_webhook_allowlist_and_idempotency(
             "message_id": 5,
             "chat": {"id": 42},
             "from": {"id": 42, "username": "owner"},
-            "text": "Fix production alert",
+            "text": "Fix <b>production</b> alert",
         },
     }
     url = f"/api/v1/webhooks/telegram/{bot['id']}"
     assert client.post(url, headers=webhook_headers, json=update).status_code == 202
+    queued = db_session.scalar(select(OutboxMessage).order_by(OutboxMessage.available_at))
+    assert queued
+    assert "&lt;b&gt;production&lt;/b&gt;" in queued.payload["text"]
     assert client.post(url, headers=webhook_headers, json=update).status_code == 202
     tasks = client.get("/api/v1/tasks", headers=auth_headers).json()
     assert len(tasks) == 1
