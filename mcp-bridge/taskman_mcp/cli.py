@@ -3,11 +3,11 @@ import getpass
 
 import httpx
 
-from .config import save_config
+from .config import save_config, validate_api_url
 
 
 def configure(api_url: str | None, token: str | None) -> None:
-    url = (api_url or input("Taskman URL: ")).strip().rstrip("/")
+    url = validate_api_url(api_url or input("Taskman URL: "))
     raw_token = token or getpass.getpass("Taskman MCP token: ")
     response = httpx.get(
         f"{url}/api/v1/projects",

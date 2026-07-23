@@ -1,3 +1,4 @@
+import html
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -13,7 +14,13 @@ from ..database import get_session
 from ..dependencies import Principal, get_principal
 from ..models import BotConfig, ChecklistItem, Comment, OutboxMessage, Project, Task, TaskStatus, TelegramUpdate
 from ..schemas import BotCreate, BotCreated, BotRead, BotUpdate
-from ..security import decrypt_secret, encrypt_secret, hash_token, new_webhook_secret
+from ..security import (
+    constant_time_equal,
+    decrypt_secret,
+    encrypt_secret,
+    hash_token,
+    new_webhook_secret,
+)
 from ..services.vault import note_default_path, write_note
 
 
@@ -130,6 +137,10 @@ def _task_buttons(task: Task) -> dict[str, Any]:
     }
 
 
+def _task_label(task: Task) -> str:
+    return f"<b>{html.escape(task.identifier)}</b> {html.escape(task.title)}"
+
+
 def _create_ticket(session: Session, bot: BotConfig, chat_id: int, text: str, message: dict[str, Any]) -> Task:
     sequence = None
     if bot.project_id:
@@ -208,7 +219,9 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
         if command == "/search" and argument:
             query = query.where(Task.title.ilike(f"%{argument}%"))
         tasks = list(session.scalars(query.order_by(Task.created_at.desc()).limit(10)))
-        body = "\n".join(f"• <b>{task.identifier}</b> [{task.status.value}] {task.title}" for task in tasks)
+        body = "\n".join(
+            f"• {_task_label(task)} [{html.escape(task.status.value)}]" for task in tasks
+        )
         _queue(session, bot, chat_id, body or "Задачи не найдены.")
         return
     if command in {"/status", "/priority", "/due", "/project", "/comment"}:
@@ -257,7 +270,7 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
         else:
             _queue(session, bot, chat_id, "Некорректные аргументы команды.")
             return
-        _queue(session, bot, chat_id, f"Обновлено: <b>{task.identifier}</b> {task.title}", _task_buttons(task))
+        _queue(session, bot, chat_id, f"Обновлено: {_task_label(task)}", _task_buttons(task))
         return
     title = argument.strip() if command == "/new" else text
     if not title:
@@ -281,7 +294,14 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
     suffix = f"\nСрок: {task.due_at.date().isoformat()}" if task.due_at else ""
     if _steps_from_text(title):
         suffix += f"\nШагов: {len(_steps_from_text(title))}"
-    _queue(session, bot, chat_id, f"Создана задача <b>{task.identifier}</b>\n{task.title}{suffix}", _task_buttons(task))
+    _queue(
+        session,
+        bot,
+        chat_id,
+        f"Создана задача <b>{html.escape(task.identifier)}</b>\n"
+        f"{html.escape(task.title)}{suffix}",
+        _task_buttons(task),
+    )
 
 
 def _handle_callback(session: Session, bot: BotConfig, callback: dict[str, Any]) -> None:
@@ -297,7 +317,12 @@ def _handle_callback(session: Session, bot: BotConfig, callback: dict[str, Any])
             task.status = TaskStatus(parts[2])
             task.completed_at = datetime.now(UTC) if task.status == TaskStatus.done else None
             task.version += 1
-            _queue(session, bot, chat_id, f"{task.identifier}: статус → {task.status.value}")
+            _queue(
+                session,
+                bot,
+                chat_id,
+                f"{html.escape(task.identifier)}: статус → {html.escape(task.status.value)}",
+            )
 
 
 def process_telegram_update(session: Session, bot: BotConfig, update: dict[str, Any]) -> bool:
@@ -321,7 +346,7 @@ def process_telegram_update(session: Session, bot: BotConfig, update: dict[str, 
 
 @router.get("/integrations/telegram/bots", response_model=list[BotRead])
 def list_bots(
-    _: Annotated[Principal, Security(get_principal)],
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> list[BotRead]:
     return [_read(bot) for bot in session.scalars(select(BotConfig).order_by(BotConfig.name))]
@@ -330,7 +355,7 @@ def list_bots(
 @router.post("/integrations/telegram/bots", response_model=BotCreated, status_code=201)
 def create_bot(
     payload: BotCreate,
-    _: Annotated[Principal, Security(get_principal)],
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> BotCreated:
     if payload.project_id and not session.get(Project, payload.project_id):
@@ -360,12 +385,18 @@ def create_bot(
 def update_bot(
     bot_id: str,
     payload: BotUpdate,
-    _: Annotated[Principal, Security(get_principal)],
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> BotRead:
     bot = _bot(session, bot_id)
     if bot.version != payload.base_version:
         raise HTTPException(status_code=409, detail={"current_version": bot.version})
+    if (
+        "project_id" in payload.model_fields_set
+        and payload.project_id
+        and not session.get(Project, payload.project_id)
+    ):
+        raise HTTPException(status_code=404, detail="Project not found")
     for field in ("name", "project_id", "allowlist", "enabled"):
         if field in payload.model_fields_set:
             setattr(bot, field, getattr(payload, field))
@@ -373,7 +404,11 @@ def update_bot(
         bot.token_encrypted = encrypt_secret(payload.token)
         bot.token_hint = f"…{payload.token[-6:]}"
     bot.version += 1
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Bot name already exists") from exc
     session.refresh(bot)
     return _read(bot)
 
@@ -381,7 +416,7 @@ def update_bot(
 @router.post("/integrations/telegram/bots/{bot_id}/register-webhook")
 def register_webhook(
     bot_id: str,
-    _: Annotated[Principal, Security(get_principal)],
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, Any]:
     bot = _bot(session, bot_id)
@@ -398,7 +433,7 @@ def register_webhook(
             raise RuntimeError(str(payload))
         bot.last_error = None
     except (httpx.HTTPError, RuntimeError) as exc:
-        bot.last_error = str(exc)[:1000]
+        bot.last_error = f"Webhook registration failed ({type(exc).__name__})"
         session.commit()
         raise HTTPException(status_code=502, detail="Telegram rejected webhook registration") from exc
     session.commit()
@@ -408,7 +443,7 @@ def register_webhook(
 @router.delete("/integrations/telegram/bots/{bot_id}", status_code=204)
 def delete_bot(
     bot_id: str,
-    _: Annotated[Principal, Security(get_principal)],
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
     session: Annotated[Session, Depends(get_session)],
 ) -> None:
     bot = _bot(session, bot_id)
@@ -424,7 +459,11 @@ def telegram_webhook(
     secret: Annotated[str | None, Header(alias="X-Telegram-Bot-Api-Secret-Token")] = None,
 ) -> dict[str, bool]:
     bot = _bot(session, bot_id)
-    if not secret or hash_token(secret) != bot.webhook_secret_hash or not bot.enabled:
+    if (
+        not secret
+        or not constant_time_equal(hash_token(secret), bot.webhook_secret_hash)
+        or not bot.enabled
+    ):
         raise HTTPException(status_code=403, detail="Invalid Telegram webhook")
     process_telegram_update(session, bot, update)
     session.commit()

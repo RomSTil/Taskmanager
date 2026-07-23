@@ -1,6 +1,7 @@
 import hashlib
 import re
 import unicodedata
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -15,6 +16,7 @@ from ..models import NoteIndex, NoteLink, NoteRevision, new_id
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 FRONTMATTER_KEYS = {"taskman_id", "title", "project_id", "tags", "revision", "created_at", "updated_at"}
+RESERVED_NOTE_DIRECTORIES = {".taskman", "_assets"}
 
 
 def _root() -> Path:
@@ -36,6 +38,25 @@ def safe_note_path(relative_path: str) -> tuple[str, Path]:
         raise HTTPException(status_code=422, detail="Unsafe vault path")
     if pure.suffix.lower() != ".md":
         raise HTTPException(status_code=422, detail="Notes must use the .md extension")
+    if pure.parts and pure.parts[0].casefold() in RESERVED_NOTE_DIRECTORIES:
+        raise HTTPException(status_code=422, detail="This vault directory is reserved")
+    return _resolve_vault_path(pure)
+
+
+def safe_asset_path(relative_path: str) -> tuple[str, Path]:
+    normalized = unicodedata.normalize("NFC", relative_path.strip()).replace("\\", "/")
+    pure = PurePosixPath(normalized)
+    if (
+        pure.is_absolute()
+        or ".." in pure.parts
+        or len(pure.parts) < 3
+        or pure.parts[0].casefold() != "_assets"
+    ):
+        raise HTTPException(status_code=422, detail="Unsafe attachment path")
+    return _resolve_vault_path(pure)
+
+
+def _resolve_vault_path(pure: PurePosixPath) -> tuple[str, Path]:
     root = _root()
     resolved = (root / Path(*pure.parts)).resolve()
     try:
@@ -115,20 +136,24 @@ def write_note(
     conflict_of_id: str | None = None,
 ) -> tuple[NoteIndex, str]:
     relative, absolute = safe_note_path(path)
-    existing_note = session.get(NoteIndex, note_id) if note_id else session.scalar(
+    path_owner = session.scalar(
         select(NoteIndex).where(NoteIndex.path_key == normalize_path_key(relative))
     )
+    existing_note = session.get(NoteIndex, note_id) if note_id else path_owner
     if existing_note and existing_note.deleted_at is None and existing_note.revision != base_revision:
         raise HTTPException(
             status_code=409,
             detail={"code": "revision_conflict", "current_revision": existing_note.revision},
         )
-    if not existing_note:
-        duplicate_path = session.scalar(
-            select(NoteIndex).where(NoteIndex.path_key == normalize_path_key(relative))
-        )
-        if duplicate_path and duplicate_path.deleted_at is None:
-            raise HTTPException(status_code=409, detail="A note already uses this path")
+    if path_owner and (not existing_note or path_owner.id != existing_note.id):
+        raise HTTPException(status_code=409, detail="A note already uses this path")
+    if absolute.exists():
+        same_file = False
+        if existing_note:
+            _, existing_absolute = safe_note_path(existing_note.path)
+            same_file = existing_absolute == absolute
+        if not same_file:
+            raise HTTPException(status_code=409, detail="A vault file already uses this path")
 
     parsed_metadata, body = _parse(content)
     if existing_note:
@@ -136,7 +161,13 @@ def write_note(
         if existing_absolute.exists():
             existing_metadata, _ = _parse(existing_absolute.read_text(encoding="utf-8"))
             parsed_metadata = {**existing_metadata, **parsed_metadata}
-    stable_id = note_id or (new_id() if conflict_of_id else str(parsed_metadata.get("taskman_id") or new_id()))
+    stable_id = note_id or (
+        new_id() if conflict_of_id else str(parsed_metadata.get("taskman_id") or new_id())
+    )
+    try:
+        stable_id = str(uuid.UUID(stable_id))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail="Note ID must be a UUID") from exc
     revision = (existing_note.revision + 1) if existing_note else 1
     rendered = _render(
         body,
@@ -218,7 +249,7 @@ def create_conflict(
     device_id: str,
 ) -> tuple[NoteIndex, str]:
     path = PurePosixPath(original.path)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     conflict_path = path.with_name(f"{path.stem}.conflict-{slugify(device_id)}-{stamp}.md").as_posix()
     metadata, _ = _parse(content)
     title = f"{metadata.get('title') or original.title} (conflict)"

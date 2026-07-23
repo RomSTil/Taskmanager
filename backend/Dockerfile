@@ -9,10 +9,10 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
-RUN pip install .
+RUN python -m pip install --upgrade "pip>=26.1.2,<27" && pip install .
 
 RUN useradd --create-home --uid 10001 taskman && mkdir -p /data/vault && chown -R taskman:taskman /data /app
 USER taskman
 
 EXPOSE 8765
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8765"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8765 --no-server-header"]

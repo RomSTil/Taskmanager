@@ -16,6 +16,14 @@ from .security import decode_access_token, hash_token
 bearer = HTTPBearer(auto_error=False)
 
 
+def _is_expired(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value < datetime.now(UTC)
+
+
 @dataclass
 class Principal:
     user: User
@@ -39,7 +47,7 @@ def get_principal(
                 AuthToken.revoked_at.is_(None),
             )
         )
-        if not auth_token or (auth_token.expires_at and auth_token.expires_at < datetime.now(UTC)):
+        if not auth_token or _is_expired(auth_token.expires_at):
             raise HTTPException(status_code=401, detail="Invalid API token")
         user = session.get(User, auth_token.user_id)
         if not user or not user.is_active:

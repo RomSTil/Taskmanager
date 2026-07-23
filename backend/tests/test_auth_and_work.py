@@ -146,3 +146,32 @@ def test_api_token_scopes_block_writes(client: TestClient, auth_headers: dict[st
     assert client.post(
         "/api/v1/tasks", headers=scoped, json={"title": "Must fail"}
     ).status_code == 403
+
+
+def test_task_hierarchy_rejects_cycles(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    project = client.get("/api/v1/projects", headers=auth_headers).json()[0]
+    parent = client.post(
+        "/api/v1/tasks",
+        headers=auth_headers,
+        json={"title": "Parent", "project_id": project["id"]},
+    ).json()
+    child = client.post(
+        "/api/v1/tasks",
+        headers=auth_headers,
+        json={
+            "title": "Child",
+            "project_id": project["id"],
+            "parent_id": parent["id"],
+        },
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/tasks/{parent['id']}",
+        headers=auth_headers,
+        json={"base_version": parent["version"], "parent_id": child["id"]},
+    )
+
+    assert response.status_code == 422
+    assert "cycle" in response.json()["detail"].lower()

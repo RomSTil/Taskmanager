@@ -95,6 +95,13 @@ tool_timeout_sec = 60
 
 Не добавляйте `.env`, токены, пароли, локальную базу и `.venv` в Git. Для production используйте PostgreSQL, HTTPS и резервные копии.
 
+Backend организован как расширяемый модульный монолит. Инструкции по подключению новых модулей
+находятся в [`backend/ARCHITECTURE.md`](backend/ARCHITECTURE.md), результаты security review —
+в [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md).
+
+Модули Яндекс Директа, событий, уведомлений и MAX-бота описаны в
+[`docs/YANDEX_DIRECT_MAX.md`](docs/YANDEX_DIRECT_MAX.md).
+
 ## Статус и лицензия
 
 Проект находится в активной разработке. Лицензия пока не выбрана.

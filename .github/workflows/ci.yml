@@ -13,9 +13,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - run: python -m pip install --upgrade "pip>=26.1.2,<27"
       - run: pip install -e './backend[dev]' -e './mcp-bridge[dev]'
       - run: ruff check backend mcp-bridge
+      - run: bandit -r backend/app mcp-bridge/taskman_mcp -q
       - run: pytest backend/tests mcp-bridge/tests --cov=backend/app --cov-report=term-missing
+      - run: pip-audit --progress-spinner off --vulnerability-service osv
 
   desktop:
     runs-on: windows-latest
@@ -25,16 +28,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: frontend/task manager/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri
-      - working-directory: desktop
+          workspaces: frontend/task manager/src-tauri
+      - working-directory: frontend/task manager
         run: npm ci
-      - working-directory: desktop
+      - working-directory: frontend/task manager
         run: npm test
-      - working-directory: desktop
+      - working-directory: frontend/task manager
         run: npm run build
-      - working-directory: desktop/src-tauri
+      - working-directory: frontend/task manager/src-tauri
         run: cargo check
