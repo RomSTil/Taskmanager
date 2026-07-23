@@ -16,8 +16,8 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    inspector = inspect(bind)
-    if "note_shares" not in inspector.get_table_names():
+    tables = set(inspect(bind).get_table_names())
+    if "note_shares" not in tables:
         op.create_table(
             "note_shares",
             sa.Column("id", sa.String(length=36), primary_key=True),
@@ -31,9 +31,7 @@ def upgrade() -> None:
             sa.Column("token", sa.String(length=64), nullable=False, unique=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         )
-        inspector = inspect(bind)
-
-    indexes = {index["name"] for index in inspector.get_indexes("note_shares")}
+    indexes = {index["name"] for index in inspect(bind).get_indexes("note_shares")} if "note_shares" in tables else set()
     if "ix_note_shares_note_id" not in indexes:
         op.create_index("ix_note_shares_note_id", "note_shares", ["note_id"])
     if "ix_note_shares_token" not in indexes:

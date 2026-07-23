@@ -16,6 +16,14 @@ const API_URL_KEY = "taskman.apiUrl";
 const SESSION_KEY = "taskman.session";
 
 export const DEFAULT_API_URL = "http://127.0.0.1:8765";
+const PRODUCTION_API_URL = "https://apitaskman.nemidamc.ru";
+
+function defaultApiUrl(): string {
+  if (typeof window === "undefined") return DEFAULT_API_URL;
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") return DEFAULT_API_URL;
+  return PRODUCTION_API_URL;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -58,7 +66,14 @@ function readError(payload: unknown, fallback: string): string {
 }
 
 export function getSavedApiUrl(): string {
-  return localStorage.getItem(API_URL_KEY) ?? DEFAULT_API_URL;
+  const stored = localStorage.getItem(API_URL_KEY);
+  const fallback = defaultApiUrl();
+  if (!stored) return fallback;
+  const normalized = normalizeUrl(stored);
+  if (fallback === PRODUCTION_API_URL && (normalized === DEFAULT_API_URL || normalized.includes("127.0.0.1") || normalized.includes("localhost"))) {
+    return fallback;
+  }
+  return normalized;
 }
 
 export function getSession(): TokenPair | null {

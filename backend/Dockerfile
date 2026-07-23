@@ -10,9 +10,11 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 RUN python -m pip install --upgrade "pip>=26.1.2,<27" && pip install .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN useradd --create-home --uid 10001 taskman && mkdir -p /data/vault && chown -R taskman:taskman /data /app
-USER taskman
+RUN useradd --create-home --uid 10001 taskman && chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 EXPOSE 8765
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8765 --no-server-header"]

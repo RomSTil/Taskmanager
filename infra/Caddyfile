@@ -1,6 +1,26 @@
-{$TASKMAN_DOMAIN:localhost} {
+apitaskman.nemidamc.ru {
     encode zstd gzip
     reverse_proxy api:8765
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+taskman.nemidamc.ru {
+    encode zstd gzip
+    root * /srv/taskman
+    try_files {path} /index.html
+    file_server
 
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
