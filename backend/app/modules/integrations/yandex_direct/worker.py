@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .client import DirectReportPending
+from .client import DirectApiError, DirectReportPending
 from .models import IntegrationJob, YandexDirectAccount
 from .service import YandexDirectService
 
@@ -91,6 +91,24 @@ def process_direct_jobs(
             job.attempts += 1
             job.available_at = datetime.now(UTC) + timedelta(seconds=exc.retry_after)
             job.error = "Yandex Direct report is pending"
+        except DirectApiError as exc:
+            session.rollback()
+            job = session.get(IntegrationJob, job.id)
+            if job is None:
+                continue
+            job.attempts += 1
+            is_registration_error = str(exc.code) == "58"
+            job.status = "failed" if is_registration_error or job.attempts >= 5 else "pending"
+            job.available_at = datetime.now(UTC) + timedelta(
+                seconds=min(3600, 2 ** min(job.attempts, 10))
+            )
+            job.error = f"Direct job failed: {exc}"
+            if job.status == "failed":
+                job.executed_at = datetime.now(UTC)
+            if job.account_id:
+                account = session.get(YandexDirectAccount, job.account_id)
+                if account:
+                    account.last_error = job.error
         except Exception as exc:
             session.rollback()
             job = session.get(IntegrationJob, job.id)

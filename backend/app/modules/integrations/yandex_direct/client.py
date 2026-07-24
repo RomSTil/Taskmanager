@@ -16,6 +16,12 @@ class DirectReportPending(RuntimeError):
         self.retry_after = max(5, retry_after)
 
 
+class DirectApiError(RuntimeError):
+    def __init__(self, code: int | str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class YandexDirectClient:
     def __init__(
         self,
@@ -55,7 +61,7 @@ class YandexDirectClient:
                     parts.append(str(message))
                 if detail and detail != message:
                     parts.append(str(detail))
-                raise RuntimeError(": ".join(parts))
+                raise DirectApiError(code, ": ".join(parts))
             return dict(body.get("result", {}))
         finally:
             if close_client:

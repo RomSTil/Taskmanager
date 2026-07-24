@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.modules.event_bus.models import DomainEvent
 from app.modules.integrations.max_bot.client import MaxApiClient
 from app.modules.integrations.max_bot.models import MaxOutboxMessage
-from app.modules.integrations.yandex_direct.client import YandexDirectClient
+from app.modules.integrations.yandex_direct.client import DirectApiError, YandexDirectClient
 from app.modules.integrations.yandex_direct.models import IntegrationJob
 from app.modules.integrations.yandex_direct.service import YandexDirectService
 from app.modules.integrations.yandex_direct.worker import process_direct_jobs
@@ -49,6 +49,14 @@ class FakeDirectClient:
             )
             current += timedelta(days=1)
         return rows
+
+
+class RegistrationIncompleteDirectClient:
+    def get_campaigns(self) -> list[dict]:
+        raise DirectApiError(
+            58,
+            "Yandex Direct API error 58: incomplete application registration",
+        )
 
 
 def test_direct_job_publishes_event_and_queues_max_notification(
@@ -110,6 +118,40 @@ def test_direct_job_publishes_event_and_queues_max_notification(
     assert outbox
     assert "Низкий бюджет" in outbox.payload["text"]
     assert outbox.target_id == 42
+
+
+def test_registration_error_fails_direct_job_without_retries(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    account = client.post(
+        "/api/v1/integrations/yandex-direct/accounts",
+        headers=auth_headers,
+        json={
+            "name": "Unregistered Direct",
+            "token": "y0_unregistered-token-with-enough-length",
+        },
+    )
+    assert account.status_code == 201, account.text
+    queued = client.post(
+        f"/api/v1/integrations/yandex-direct/accounts/{account.json()['id']}/jobs",
+        headers=auth_headers,
+        json={"job_type": "balance_check"},
+    )
+    assert queued.status_code == 202, queued.text
+
+    direct = client.app.state.module_context.services.get(YandexDirectService)
+    direct.client_factory = lambda _token, _login: RegistrationIncompleteDirectClient()
+    assert process_direct_jobs(db_session, direct) == 0
+
+    job = db_session.get(IntegrationJob, queued.json()["id"])
+    assert job
+    db_session.refresh(job)
+    assert job.status == "failed"
+    assert job.attempts == 1
+    assert job.executed_at is not None
+    assert "error 58" in (job.error or "")
 
 
 def test_max_webhook_shows_menu_and_is_idempotent(

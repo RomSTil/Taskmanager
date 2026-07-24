@@ -123,14 +123,15 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
     setMessage(`Проверяем аккаунт «${account.name}»…`);
     try {
       let job = await api.createDirectJob(account.id, "balance_check");
-      for (let attempt = 0; attempt < 80 && job.status !== "completed" && job.status !== "failed"; attempt += 1) {
-        await wait(1500);
+      for (let attempt = 0; attempt < 30 && job.status !== "completed" && job.status !== "failed"; attempt += 1) {
+        await wait(2000);
         job = await api.getDirectJob(job.id);
+        if (job.status === "pending" && job.error && job.error !== "Yandex Direct report is pending") break;
       }
       await load();
       if (job.status === "completed") {
         setMessage(`Данные аккаунта «${account.name}» обновлены.`);
-      } else if (job.status === "failed") {
+      } else if (job.status === "failed" || job.error) {
         throw new Error(job.error || "Проверка Яндекс Директа завершилась с ошибкой");
       } else {
         setMessage(`Проверка аккаунта «${account.name}» продолжается в фоне. Обнови страницу чуть позже.`);
