@@ -46,9 +46,16 @@ class YandexDirectClient:
             response.raise_for_status()
             body = response.json()
             if "error" in body:
-                raise RuntimeError(
-                    f"Yandex Direct API error {body['error'].get('error_code', 'unknown')}"
-                )
+                error = body["error"]
+                code = error.get("error_code", "unknown")
+                message = error.get("error_string") or error.get("error_detail")
+                detail = error.get("error_detail")
+                parts = [f"Yandex Direct API error {code}"]
+                if message:
+                    parts.append(str(message))
+                if detail and detail != message:
+                    parts.append(str(detail))
+                raise RuntimeError(": ".join(parts))
             return dict(body.get("result", {}))
         finally:
             if close_client:

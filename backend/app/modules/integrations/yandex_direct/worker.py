@@ -101,7 +101,7 @@ def process_direct_jobs(
             job.available_at = datetime.now(UTC) + timedelta(
                 seconds=min(3600, 2 ** min(job.attempts, 10))
             )
-            job.error = f"Direct job failed ({type(exc).__name__})"
+            job.error = f"Direct job failed: {exc}"
             if job.account_id:
                 account = session.get(YandexDirectAccount, job.account_id)
                 if account:
