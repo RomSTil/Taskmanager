@@ -27,7 +27,7 @@ def run_once(context: ModuleContext | None = None) -> dict[str, int]:
         scheduled = schedule_due_checks(session, direct)
         completed = process_direct_jobs(session, direct)
         dispatched = notifications.dispatch_pending(session)
-        delivered = deliver_max_messages(session)
+        delivered = deliver_max_messages(session, verify_tls=context.settings.max_api_tls_verify)
     return {
         "scheduled": scheduled,
         "completed": completed,

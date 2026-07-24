@@ -8,7 +8,12 @@ from .client import MaxApiClient
 from .models import MaxBotConfig, MaxOutboxMessage
 
 
-def deliver_max_messages(session: Session, *, limit: int = 50) -> int:
+def deliver_max_messages(
+    session: Session,
+    *,
+    limit: int = 50,
+    verify_tls: bool = True,
+) -> int:
     now = datetime.now(UTC)
     messages = list(
         session.scalars(
@@ -30,7 +35,7 @@ def deliver_max_messages(session: Session, *, limit: int = 50) -> int:
             message.available_at = now + timedelta(minutes=5)
             continue
         try:
-            client = MaxApiClient(decrypt_secret(bot.token_encrypted))
+            client = MaxApiClient(decrypt_secret(bot.token_encrypted), verify_tls=verify_tls)
             client.send_message(message.target_type, message.target_id, message.payload)
             message.sent_at = datetime.now(UTC)
             message.last_error = None

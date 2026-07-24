@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     telegram_poll_seconds: float = 1.0
     telegram_polling_enabled: bool = False
     integration_poll_seconds: float = Field(default=5.0, ge=0.5, le=300)
+    max_api_tls_verify: bool = True
     trusted_hosts: str = "localhost,127.0.0.1,testserver"
     login_max_attempts: int = Field(default=8, ge=3, le=100)
     login_window_seconds: int = Field(default=300, ge=30, le=86400)

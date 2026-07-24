@@ -120,7 +120,10 @@ def register_webhook(
 ) -> dict[str, Any]:
     try:
         bot = service.bot(session, bot_id)
-        client = MaxApiClient(decrypt_secret(bot.token_encrypted))
+        client = MaxApiClient(
+            decrypt_secret(bot.token_encrypted),
+            verify_tls=service.settings.max_api_tls_verify,
+        )
         result = client.register_webhook(
             service.read(bot).webhook_url,
             decrypt_secret(bot.webhook_secret_encrypted),

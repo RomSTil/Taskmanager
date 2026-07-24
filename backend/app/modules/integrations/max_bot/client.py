@@ -2,7 +2,6 @@ from typing import Any
 
 import httpx
 
-
 MAX_API_BASE = "https://platform-api2.max.ru"
 
 
@@ -11,12 +10,14 @@ class MaxApiClient:
         self,
         token: str,
         *,
+        verify_tls: bool = True,
         timeout: float = 20,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._headers = {"Authorization": token, "Content-Type": "application/json"}
         self._timeout = timeout
         self._client = http_client
+        self._verify_tls = verify_tls
 
     def _request(
         self,
@@ -26,7 +27,7 @@ class MaxApiClient:
         params: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        client = self._client or httpx.Client(timeout=self._timeout)
+        client = self._client or httpx.Client(timeout=self._timeout, verify=self._verify_tls)
         close_client = self._client is None
         try:
             response = client.request(
