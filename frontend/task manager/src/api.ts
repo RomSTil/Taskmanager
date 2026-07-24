@@ -11,6 +11,7 @@ import type {
   TokenPair,
   WorkspaceBootstrap,
   DirectAccount,
+  DirectJob,
   MaxBot,
   MaxBotCreated,
 } from "./types";
@@ -286,6 +287,25 @@ export class TaskmanApi {
       method: "POST",
       body: JSON.stringify(input),
     }, true);
+  }
+
+  createDirectJob(accountId: string, jobType: "balance_check" | "campaign_sync" | "report"): Promise<DirectJob> {
+    return this.request<DirectJob>(
+      `/integrations/yandex-direct/accounts/${encodeURIComponent(accountId)}/jobs`,
+      {
+        method: "POST",
+        body: JSON.stringify({ job_type: jobType }),
+      },
+      true,
+    );
+  }
+
+  getDirectJob(jobId: string): Promise<DirectJob> {
+    return this.request<DirectJob>(
+      `/integrations/yandex-direct/jobs/${encodeURIComponent(jobId)}`,
+      {},
+      true,
+    );
   }
 
   listMaxBots(): Promise<MaxBot[]> {

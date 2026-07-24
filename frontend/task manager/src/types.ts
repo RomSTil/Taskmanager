@@ -173,6 +173,22 @@ export interface DirectAccount {
   updated_at: string;
 }
 
+export interface DirectJob {
+  id: string;
+  provider: string;
+  job_type: string;
+  account_id: string | null;
+  status: "pending" | "running" | "completed" | "failed";
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+  attempts: number;
+  available_at: string;
+  started_at: string | null;
+  executed_at: string | null;
+  error: string | null;
+  created_at: string;
+}
+
 export interface MaxBot {
   id: string;
   name: string;

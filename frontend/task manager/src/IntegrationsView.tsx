@@ -33,7 +33,19 @@ function parseAllowlist(value: string): number[] {
     .filter((item) => Number.isSafeInteger(item) && item > 0);
 }
 
-function DirectAccountCard({ account }: { account: DirectAccount }) {
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function DirectAccountCard({
+  account,
+  refreshing,
+  onRefresh,
+}: {
+  account: DirectAccount;
+  refreshing: boolean;
+  onRefresh: (account: DirectAccount) => void;
+}) {
   return (
     <article className="integration-card">
       <div className="integration-card-heading">
@@ -47,6 +59,14 @@ function DirectAccountCard({ account }: { account: DirectAccount }) {
       </div>
       <p className="integration-meta">Последняя проверка: {displayDate(account.last_checked_at)}</p>
       {account.last_error && <p className="integration-error">Последняя ошибка: {account.last_error}</p>}
+      <button
+        className="secondary-button integration-action"
+        type="button"
+        onClick={() => onRefresh(account)}
+        disabled={refreshing || !account.enabled}
+      >
+        {refreshing ? "Проверяем…" : "Проверить сейчас"}
+      </button>
     </article>
   );
 }
@@ -77,6 +97,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
   const [maxSecret, setMaxSecret] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -95,6 +116,31 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
   }
 
   useEffect(() => { void load(); }, [api]);
+
+  async function refreshDirectAccount(account: DirectAccount) {
+    setRefreshingAccountId(account.id);
+    setError("");
+    setMessage(`Проверяем аккаунт «${account.name}»…`);
+    try {
+      let job = await api.createDirectJob(account.id, "balance_check");
+      for (let attempt = 0; attempt < 80 && job.status !== "completed" && job.status !== "failed"; attempt += 1) {
+        await wait(1500);
+        job = await api.getDirectJob(job.id);
+      }
+      await load();
+      if (job.status === "completed") {
+        setMessage(`Данные аккаунта «${account.name}» обновлены.`);
+      } else if (job.status === "failed") {
+        throw new Error(job.error || "Проверка Яндекс Директа завершилась с ошибкой");
+      } else {
+        setMessage(`Проверка аккаунта «${account.name}» продолжается в фоне. Обнови страницу чуть позже.`);
+      }
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setRefreshingAccountId(null);
+    }
+  }
 
   async function submitDirect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -190,7 +236,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
             </div>
             <button className="primary-button" type="submit" disabled={busy}>Добавить аккаунт</button>
           </form>
-          <div className="integration-list">{loading ? <div className="loading-line">Загружаем аккаунты…</div> : accounts.length ? accounts.map((account) => <DirectAccountCard account={account} key={account.id} />) : <div className="integration-empty">Аккаунт ещё не подключён.</div>}</div>
+          <div className="integration-list">{loading ? <div className="loading-line">Загружаем аккаунты…</div> : accounts.length ? accounts.map((account) => <DirectAccountCard account={account} refreshing={refreshingAccountId === account.id} onRefresh={refreshDirectAccount} key={account.id} />) : <div className="integration-empty">Аккаунт ещё не подключён.</div>}</div>
         </div>
 
         <div className="integration-column">
