@@ -59,6 +59,37 @@ class RegistrationIncompleteDirectClient:
         )
 
 
+class SharedAccountDirectClient:
+    def get_campaigns(self) -> list[dict]:
+        return [
+            {
+                "Id": 202,
+                "Name": "Shared account campaign",
+                "State": "ON",
+                "Status": "ACCEPTED",
+                "Currency": "RUB",
+                "Funds": {
+                    "Mode": "SHARED_ACCOUNT_FUNDS",
+                    "SharedAccountFunds": {"Spend": 1_000_000_000},
+                },
+                "Statistics": {"Impressions": 1000, "Clicks": 50},
+            }
+        ]
+
+    def get_report(self, date_from, date_to, *, campaign_ids=None) -> list[dict[str, str]]:
+        return [
+            {
+                "Date": date_from.isoformat(),
+                "CampaignId": "202",
+                "CampaignName": "Shared account campaign",
+                "Impressions": "1000",
+                "Clicks": "50",
+                "Cost": "1000.00",
+                "Conversions": "2",
+            }
+        ]
+
+
 def test_direct_job_publishes_event_and_queues_max_notification(
     client: TestClient,
     auth_headers: dict[str, str],
@@ -118,6 +149,46 @@ def test_direct_job_publishes_event_and_queues_max_notification(
     assert outbox
     assert "Низкий бюджет" in outbox.payload["text"]
     assert outbox.target_id == 42
+
+
+def test_shared_account_without_balance_does_not_publish_low_budget_event(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    account = client.post(
+        "/api/v1/integrations/yandex-direct/accounts",
+        headers=auth_headers,
+        json={
+            "name": "Shared Direct",
+            "token": "y0_shared-account-token-with-enough-length",
+            "balance_threshold": "5000",
+            "days_left_threshold": "3",
+        },
+    )
+    assert account.status_code == 201, account.text
+    queued = client.post(
+        f"/api/v1/integrations/yandex-direct/accounts/{account.json()['id']}/jobs",
+        headers=auth_headers,
+        json={"job_type": "balance_check"},
+    )
+    assert queued.status_code == 202, queued.text
+
+    direct = client.app.state.module_context.services.get(YandexDirectService)
+    direct.client_factory = lambda _token, _login: SharedAccountDirectClient()
+    assert process_direct_jobs(db_session, direct) == 1
+
+    job = db_session.get(IntegrationJob, queued.json()["id"])
+    assert job
+    db_session.refresh(job)
+    assert job.status == "completed"
+    assert job.result["balance"] is None
+    assert job.result["days_left"] is None
+
+    event = db_session.scalar(
+        select(DomainEvent).where(DomainEvent.event_type == "BudgetRunningLow")
+    )
+    assert event is None
 
 
 def test_registration_error_fails_direct_job_without_retries(

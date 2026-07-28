@@ -206,7 +206,11 @@ class YandexDirectService:
             start=Decimal("0"),
         )
         average_daily_cost = previous_cost / Decimal(total_days)
-        days_left = float(balance / average_daily_cost) if average_daily_cost > 0 else None
+        days_left = (
+            float(balance / average_daily_cost)
+            if known_balances and average_daily_cost > 0
+            else None
+        )
         low_by_balance = bool(known_balances) and balance <= account.balance_threshold
         low_by_days = (
             days_left is not None and days_left <= float(account.days_left_threshold)
