@@ -450,6 +450,7 @@ def test_max_unknown_user_is_moderated_and_owner_can_approve(
     repeated = {**unknown, "timestamp": unknown["timestamp"] + 1}
     assert client.post(url, headers=headers, json=repeated).status_code == 200
     messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert len(messages) == 2
     assert sum("Запрос доступа" in item.payload["text"] for item in messages) == 1
 
     approve = {
@@ -525,6 +526,54 @@ def test_max_owner_can_deny_unknown_user(
     assert request.status == "denied"
     messages = list(db_session.scalars(select(MaxOutboxMessage)))
     assert any("не одобрил доступ" in item.payload["text"] for item in messages)
+
+
+def test_max_legacy_chat_claims_sender_as_owner(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/max/bots",
+        headers=auth_headers,
+        json={
+            "name": "Legacy chat",
+            "token": "max-legacy-chat-token-with-enough-length",
+            "target_type": "chat",
+            "target_id": 4532159,
+        },
+    )
+    assert created.status_code == 201, created.text
+    bot = created.json()
+    response = client.post(
+        f"/api/v1/webhooks/max/{bot['id']}",
+        headers={"X-Max-Bot-Api-Secret": bot["webhook_secret"]},
+        json={
+            "update_type": "message_created",
+            "timestamp": int(datetime.now(UTC).timestamp() * 1000),
+            "message": {
+                "sender": {"user_id": 365232600, "name": "Owner"},
+                "recipient": {"chat_id": 4532159},
+                "body": {"text": "/menu"},
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    stored_bot = db_session.get(MaxBotConfig, bot["id"])
+    assert stored_bot
+    db_session.refresh(stored_bot)
+    assert stored_bot.owner_user_id == 365232600
+    assert stored_bot.allowlist == [365232600]
+    assert db_session.scalar(
+        select(MaxAccessRequest).where(MaxAccessRequest.bot_id == bot["id"])
+    ) is None
+    messages = list(
+        db_session.scalars(
+            select(MaxOutboxMessage).where(MaxOutboxMessage.bot_id == bot["id"])
+        )
+    )
+    assert len(messages) == 1
 
 
 def test_max_client_uses_authorization_header_and_user_target() -> None:

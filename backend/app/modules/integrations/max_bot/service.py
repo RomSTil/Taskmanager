@@ -158,6 +158,26 @@ class MaxBotService:
             )
         )
 
+    def claim_owner(
+        self,
+        session: Session,
+        bot: MaxBotConfig,
+        user_id: int,
+    ) -> None:
+        bot.owner_user_id = user_id
+        bot.allowlist = list(dict.fromkeys([*bot.allowlist, user_id]))
+        bot.version += 1
+        request = session.scalar(
+            select(MaxAccessRequest).where(
+                MaxAccessRequest.bot_id == bot.id,
+                MaxAccessRequest.user_id == user_id,
+            )
+        )
+        if request is not None and request.status == "pending":
+            request.status = "approved"
+            request.reviewed_by = user_id
+            request.reviewed_at = datetime.now(UTC)
+
     def review_access(
         self,
         session: Session,

@@ -232,9 +232,18 @@ def max_webhook(
         bot.target_type = target_type
         bot.target_id = target_id
         if user_id is not None:
-            bot.owner_user_id = user_id
-            bot.allowlist = list(dict.fromkeys([*bot.allowlist, user_id]))
-        bot.version += 1
+            service.claim_owner(session, bot, user_id)
+        else:
+            bot.version += 1
+    elif (
+        bot.owner_user_id is None
+        and user_id is not None
+        and bot.target_type == "chat"
+        and target_type == "chat"
+        and bot.target_id == target_id
+    ):
+        # Legacy records only stored the dialog ID, which is not a MAX user ID.
+        service.claim_owner(session, bot, user_id)
     action = _callback_action(update) if update_type == "message_callback" else ""
     moderation = _moderation_action(action)
     is_owner = user_id is not None and user_id == bot.owner_user_id
@@ -318,7 +327,7 @@ def max_webhook(
             )
         elif access.status == "approved":
             allowed = True
-        else:
+        elif created:
             service.queue(
                 session,
                 bot,
@@ -326,7 +335,7 @@ def max_webhook(
                 target_id,
                 access_pending_payload(),
             )
-            if created and bot.target_type and bot.target_id is not None:
+            if bot.target_type and bot.target_id is not None:
                 service.queue(
                     session,
                     bot,

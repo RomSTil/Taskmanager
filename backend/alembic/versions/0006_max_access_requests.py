@@ -31,7 +31,8 @@ def upgrade() -> None:
         )
         op.execute(
             "UPDATE max_bot_configs SET owner_user_id = target_id "
-            "WHERE owner_user_id IS NULL AND target_id IS NOT NULL"
+            "WHERE owner_user_id IS NULL AND target_type = 'user' "
+            "AND target_id IS NOT NULL"
         )
     MaxAccessRequest.__table__.create(bind=bind, checkfirst=True)
 
