@@ -161,13 +161,24 @@ class YandexDirectService:
                 job.payload.get("date_from", default_from.isoformat())
             )
             campaigns = self.repository.save_campaigns(session, account, client.get_campaigns())
+            shared_account = None
+            if any(campaign.uses_shared_account for campaign in campaigns):
+                shared_account = client.get_shared_account()
             rows = client.get_report(
                 date_from,
                 date_to,
                 campaign_ids=[campaign.campaign_id for campaign in campaigns],
             )
             stats = self.repository.save_stats(session, account, rows)
-            result = self._analyze(session, account, campaigns, stats, date_from, date_to)
+            result = self._analyze(
+                session,
+                account,
+                campaigns,
+                stats,
+                date_from,
+                date_to,
+                shared_account=shared_account,
+            )
             result["campaigns"] = len(campaigns)
             result["rows"] = len(stats)
             if job.job_type == "report":
@@ -203,14 +214,28 @@ class YandexDirectService:
         stats: list[DirectDailyStat],
         date_from: date,
         date_to: date,
+        *,
+        shared_account: dict | None = None,
     ) -> dict:
         known_balances = [
             campaign.balance
             for campaign in campaigns
             if campaign.balance is not None
         ]
+        shared_balance = (
+            Decimal(str(shared_account["Amount"]))
+            if shared_account and shared_account.get("Amount") is not None
+            else None
+        )
         balance = sum(known_balances, start=Decimal("0"))
-        currency = next((campaign.currency for campaign in campaigns if campaign.currency), "")
+        if shared_balance is not None:
+            balance += shared_balance
+        has_balance = bool(known_balances) or shared_balance is not None
+        currency = (
+            str(shared_account.get("Currency") or "")
+            if shared_account
+            else next((campaign.currency for campaign in campaigns if campaign.currency), "")
+        )
         costs_by_date: dict[date, Decimal] = {}
         for stat in stats:
             costs_by_date[stat.stat_date] = (
@@ -224,10 +249,10 @@ class YandexDirectService:
         average_daily_cost = previous_cost / Decimal(total_days)
         days_left = (
             float(balance / average_daily_cost)
-            if known_balances and average_daily_cost > 0
+            if has_balance and average_daily_cost > 0
             else None
         )
-        low_by_balance = bool(known_balances) and balance <= account.balance_threshold
+        low_by_balance = has_balance and balance <= account.balance_threshold
         low_by_days = (
             days_left is not None and days_left <= float(account.days_left_threshold)
         )
@@ -264,8 +289,19 @@ class YandexDirectService:
         account.last_checked_at = datetime.now(UTC)
         account.last_error = None
         return {
-            "balance": float(balance) if known_balances else None,
+            "balance": float(balance) if has_balance else None,
             "currency": currency,
+            "balance_source": (
+                "shared_account"
+                if shared_balance is not None
+                else "campaigns" if known_balances else None
+            ),
+            "amount_available_for_transfer": (
+                float(shared_account["AmountAvailableForTransfer"])
+                if shared_account
+                and shared_account.get("AmountAvailableForTransfer") is not None
+                else None
+            ),
             "average_daily_cost": float(average_daily_cost),
             "days_left": days_left,
             "shared_account_campaigns": sum(
@@ -291,9 +327,30 @@ class YandexDirectService:
                 )
             )
             known = [item.balance for item in campaigns if item.balance is not None]
-            if known:
+            shared = any(item.uses_shared_account for item in campaigns)
+            shared_account = None
+            shared_error = None
+            if shared:
+                try:
+                    client = self.client_factory(
+                        decrypt_secret(account.token_encrypted),
+                        account.client_login,
+                    )
+                    shared_account = client.get_shared_account()
+                except Exception as exc:  # noqa: BLE001
+                    shared_error = str(exc)
+            if shared_account and shared_account.get("Amount") is not None:
+                amount = Decimal(str(shared_account["Amount"]))
+                currency = str(shared_account.get("Currency") or "")
+                transfer = shared_account.get("AmountAvailableForTransfer")
+                lines.append(f"{account.name}: {amount:.2f} {currency}")
+                if transfer is not None:
+                    lines.append(f"Доступно к переносу: {Decimal(str(transfer)):.2f} {currency}")
+            elif known:
                 currency = next((item.currency for item in campaigns if item.currency), "")
                 lines.append(f"{account.name}: {sum(known, Decimal('0')):.2f} {currency}")
+            elif shared_error:
+                lines.append(f"{account.name}: не удалось запросить общий счёт — {shared_error}")
             else:
                 lines.append(f"{account.name}: общий счёт или данные ещё не загружены")
             self.queue_job(
@@ -308,7 +365,7 @@ class YandexDirectService:
         session.commit()
         if not accounts:
             return Notification("Аккаунт Яндекс Директа ещё не настроен.", "warning")
-        lines.append("Обновление поставлено в очередь.")
+        lines.append("Фоновое обновление статистики поставлено в очередь.")
         return Notification("\n".join(lines))
 
     @staticmethod

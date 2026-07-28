@@ -8,6 +8,7 @@ import httpx
 
 
 DIRECT_API_BASE = "https://api.direct.yandex.com/json/v5"
+DIRECT_LIVE_V4_URL = "https://api.direct.yandex.ru/live/v4/json/"
 
 
 class DirectReportPending(RuntimeError):
@@ -31,6 +32,8 @@ class YandexDirectClient:
         timeout: float = 30,
         http_client: httpx.Client | None = None,
     ) -> None:
+        self._token = token
+        self._client_login = client_login
         self._headers = {
             "Authorization": f"Bearer {token}",
             "Accept-Language": "ru",
@@ -89,6 +92,46 @@ class YandexDirectClient:
             },
         )
         return list(result.get("Campaigns", []))
+
+    def get_shared_account(self) -> dict[str, Any] | None:
+        selection: dict[str, Any] = {}
+        if self._client_login:
+            selection["Logins"] = [self._client_login]
+        client = self._client or httpx.Client(timeout=self._timeout)
+        close_client = self._client is None
+        try:
+            response = client.post(
+                DIRECT_LIVE_V4_URL,
+                json={
+                    "method": "AccountManagement",
+                    "token": self._token,
+                    "param": {
+                        "SelectionCriteria": selection,
+                        "Action": "Get",
+                    },
+                },
+            )
+            response.raise_for_status()
+            body = response.json()
+            if "error_code" in body:
+                code = body.get("error_code", "unknown")
+                message = body.get("error_str") or body.get("error_detail") or "unknown error"
+                raise DirectApiError(code, f"Yandex Direct API v4 error {code}: {message}")
+            accounts = list((body.get("data") or {}).get("Accounts") or [])
+            if self._client_login:
+                expected = self._client_login.casefold()
+                return next(
+                    (
+                        dict(item)
+                        for item in accounts
+                        if str(item.get("Login") or "").casefold() == expected
+                    ),
+                    None,
+                )
+            return dict(accounts[0]) if accounts else None
+        finally:
+            if close_client:
+                client.close()
 
     def get_report(
         self,

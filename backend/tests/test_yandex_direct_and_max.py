@@ -90,6 +90,20 @@ class SharedAccountDirectClient:
             }
         ]
 
+    def get_shared_account(self) -> dict | None:
+        return None
+
+
+class SharedAccountWithBalanceDirectClient(SharedAccountDirectClient):
+    def get_shared_account(self) -> dict:
+        return {
+            "Login": "shared-owner",
+            "Amount": "2039.87",
+            "AmountAvailableForTransfer": "1783.04",
+            "Currency": "RUB",
+            "AccountID": 118876578,
+        }
+
 
 def test_direct_job_publishes_event_and_queues_max_notification(
     client: TestClient,
@@ -190,6 +204,45 @@ def test_shared_account_without_balance_does_not_publish_low_budget_event(
         select(DomainEvent).where(DomainEvent.event_type == "BudgetRunningLow")
     )
     assert event is None
+
+
+def test_shared_account_balance_is_loaded_once_and_shown_in_notification(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    account = client.post(
+        "/api/v1/integrations/yandex-direct/accounts",
+        headers=auth_headers,
+        json={
+            "name": "Shared Balance",
+            "token": "y0_shared-balance-token-with-enough-length",
+            "balance_threshold": "1000",
+            "days_left_threshold": "3",
+        },
+    )
+    assert account.status_code == 201, account.text
+    queued = client.post(
+        f"/api/v1/integrations/yandex-direct/accounts/{account.json()['id']}/jobs",
+        headers=auth_headers,
+        json={"job_type": "balance_check"},
+    )
+    assert queued.status_code == 202, queued.text
+
+    direct = client.app.state.module_context.services.get(YandexDirectService)
+    direct.client_factory = lambda _token, _login: SharedAccountWithBalanceDirectClient()
+    assert process_direct_jobs(db_session, direct) == 1
+
+    job = db_session.get(IntegrationJob, queued.json()["id"])
+    assert job
+    db_session.refresh(job)
+    assert job.result["balance"] == 2039.87
+    assert job.result["balance_source"] == "shared_account"
+    assert job.result["amount_available_for_transfer"] == 1783.04
+
+    notification = direct.balance_notification(db_session)
+    assert "2039.87 RUB" in notification.text
+    assert "1783.04 RUB" in notification.text
 
 
 def test_registration_error_fails_direct_job_without_retries(
@@ -409,3 +462,45 @@ def test_yandex_client_uses_bearer_token_and_client_login() -> None:
     assert captured["authorization"] == "Bearer oauth-token"
     assert captured["client_login"] == "agency-client"
     assert captured["path"].endswith("/json/v5/campaigns")
+
+
+def test_yandex_client_loads_shared_account_balance_from_live_v4() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "ActionsResult": [],
+                    "Accounts": [
+                        {
+                            "Login": "shared-owner",
+                            "Amount": "2039.87",
+                            "AmountAvailableForTransfer": "1783.04",
+                            "Currency": "RUB",
+                            "AccountID": 118876578,
+                        }
+                    ],
+                }
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http_client:
+        account = YandexDirectClient(
+            "oauth-token",
+            client_login="shared-owner",
+            http_client=http_client,
+        ).get_shared_account()
+
+    assert account
+    assert account["Amount"] == "2039.87"
+    assert captured["path"].endswith("/live/v4/json/")
+    assert captured["body"]["method"] == "AccountManagement"
+    assert captured["body"]["token"] == "oauth-token"
+    assert captured["body"]["param"]["SelectionCriteria"] == {
+        "Logins": ["shared-owner"]
+    }
