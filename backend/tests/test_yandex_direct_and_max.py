@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -9,7 +10,7 @@ from app.modules.event_bus.models import DomainEvent
 from app.modules.integrations.max_bot.client import MaxApiClient
 from app.modules.integrations.max_bot.models import MaxOutboxMessage
 from app.modules.integrations.yandex_direct.client import DirectApiError, YandexDirectClient
-from app.modules.integrations.yandex_direct.models import IntegrationJob
+from app.modules.integrations.yandex_direct.models import DirectDailyStat, IntegrationJob
 from app.modules.integrations.yandex_direct.service import YandexDirectService
 from app.modules.integrations.yandex_direct.worker import process_direct_jobs
 from app.modules.notifications.service import NotificationService
@@ -223,6 +224,11 @@ def test_registration_error_fails_direct_job_without_retries(
     assert job.attempts == 1
     assert job.executed_at is not None
     assert "error 58" in (job.error or "")
+    failed_event = db_session.scalar(
+        select(DomainEvent).where(DomainEvent.event_type == "DirectSyncFailed")
+    )
+    assert failed_event is not None
+    assert "error 58" in failed_event.payload["error"]
 
 
 def test_max_webhook_shows_menu_and_is_idempotent(
@@ -254,10 +260,89 @@ def test_max_webhook_shows_menu_and_is_idempotent(
 
     messages = list(db_session.scalars(select(MaxOutboxMessage)))
     assert len(messages) == 1
-    assert messages[0].payload["text"] == "Яндекс Директ"
+    assert "Яндекс Директ" in messages[0].payload["text"]
     buttons = messages[0].payload["attachments"][0]["payload"]["buttons"]
-    assert buttons[0][0]["payload"] == "direct.balance"
-    assert buttons[-1][0]["payload"] == "direct.settings"
+    assert buttons[0][0]["payload"] == "direct.overview"
+    assert buttons[1][0]["payload"] == "direct.today"
+    assert buttons[1][1]["payload"] == "direct.week"
+    assert buttons[2][0]["payload"] == "direct.month"
+    assert buttons[-1][0]["payload"] == "direct.refresh"
+    assert buttons[-1][1]["payload"] == "direct.settings"
+
+
+def test_max_callback_answers_with_waiting_state_and_returns_metrics(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/max/bots",
+        headers=auth_headers,
+        json={
+            "name": "Metrics",
+            "token": "max-test-token-with-enough-length",
+            "allowlist": [42],
+        },
+    )
+    assert created.status_code == 201, created.text
+    bot = created.json()
+    account = client.post(
+        "/api/v1/integrations/yandex-direct/accounts",
+        headers=auth_headers,
+        json={
+            "name": "Metrics Direct",
+            "token": "y0_metrics-token-with-enough-length",
+        },
+    )
+    assert account.status_code == 201, account.text
+    db_session.add(
+        DirectDailyStat(
+            account_id=account.json()["id"],
+            campaign_id=101,
+            campaign_name="Test",
+            stat_date=datetime.now(UTC).date(),
+            impressions=1000,
+            clicks=100,
+            cost=500,
+            conversions=10,
+        )
+    )
+    db_session.commit()
+    answered: dict = {}
+
+    def fake_answer(self, callback_id: str, payload: dict) -> dict:
+        answered["callback_id"] = callback_id
+        answered["payload"] = payload
+        return {"success": True}
+
+    monkeypatch.setattr(MaxApiClient, "answer_callback", fake_answer)
+    update = {
+        "update_type": "message_callback",
+        "timestamp": int(datetime.now(UTC).timestamp() * 1000),
+        "callback": {
+            "callback_id": "callback-123",
+            "payload": "direct.today",
+        },
+        "user": {"user_id": 42, "name": "Owner"},
+    }
+    headers = {"X-Max-Bot-Api-Secret": bot["webhook_secret"]}
+    response = client.post(
+        f"/api/v1/webhooks/max/{bot['id']}",
+        headers=headers,
+        json=update,
+    )
+    assert response.status_code == 200, response.text
+    assert answered["callback_id"] == "callback-123"
+    assert "Пожалуйста, подождите" in answered["payload"]["text"]
+
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert len(messages) == 1
+    assert "CTR: 10.00%" in messages[0].payload["text"]
+    assert "Средний CPC: 5.00" in messages[0].payload["text"]
+    assert "CPA: 50.00" in messages[0].payload["text"]
+    buttons = messages[0].payload["attachments"][0]["payload"]["buttons"]
+    assert buttons[0][0]["payload"] == "direct.overview"
 
 
 def test_max_client_uses_authorization_header_and_user_target() -> None:
@@ -279,6 +364,28 @@ def test_max_client_uses_authorization_header_and_user_target() -> None:
     assert result["message"]["body"]["text"] == "ok"
     assert captured["authorization"] == "secret-token"
     assert captured["query"] == {"user_id": "42"}
+
+
+def test_max_client_answers_callback() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"success": True})
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http_client:
+        result = MaxApiClient("secret-token", http_client=http_client).answer_callback(
+            "callback-123",
+            {"text": "waiting"},
+        )
+
+    assert result["success"] is True
+    assert captured["path"].endswith("/answers")
+    assert captured["query"] == {"callback_id": "callback-123"}
+    assert captured["body"] == {"message": {"text": "waiting"}}
 
 
 def test_yandex_client_uses_bearer_token_and_client_login() -> None:

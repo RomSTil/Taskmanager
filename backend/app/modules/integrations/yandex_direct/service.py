@@ -167,7 +167,16 @@ class YandexDirectService:
                 campaign_ids=[campaign.campaign_id for campaign in campaigns],
             )
             stats = self.repository.save_stats(session, account, rows)
+            result = self._analyze(session, account, campaigns, stats, date_from, date_to)
+            result["campaigns"] = len(campaigns)
+            result["rows"] = len(stats)
             if job.job_type == "report":
+                impressions = sum(item.impressions for item in stats)
+                clicks = sum(item.clicks for item in stats)
+                cost = sum((item.cost for item in stats), start=Decimal("0"))
+                conversions = sum(
+                    (item.conversions for item in stats), start=Decimal("0")
+                )
                 self.event_bus.publish(
                     session,
                     ReportGenerated(
@@ -176,12 +185,13 @@ class YandexDirectService:
                         date_from=date_from.isoformat(),
                         date_to=date_to.isoformat(),
                         rows=len(stats),
+                        impressions=impressions,
+                        clicks=clicks,
+                        cost=float(cost),
+                        conversions=float(conversions),
                     ),
                     deduplication_key=f"ReportGenerated:{job.id}",
                 )
-            result = self._analyze(session, account, campaigns, stats, date_from, date_to)
-            result["campaigns"] = len(campaigns)
-            result["rows"] = len(stats)
             return result
         raise ValueError(f"Unsupported Direct job type: {job.job_type}")
 
@@ -194,12 +204,18 @@ class YandexDirectService:
         date_from: date,
         date_to: date,
     ) -> dict:
-        known_balances = [campaign.balance for campaign in campaigns if campaign.balance is not None]
+        known_balances = [
+            campaign.balance
+            for campaign in campaigns
+            if campaign.balance is not None
+        ]
         balance = sum(known_balances, start=Decimal("0"))
         currency = next((campaign.currency for campaign in campaigns if campaign.currency), "")
         costs_by_date: dict[date, Decimal] = {}
         for stat in stats:
-            costs_by_date[stat.stat_date] = costs_by_date.get(stat.stat_date, Decimal("0")) + stat.cost
+            costs_by_date[stat.stat_date] = (
+                costs_by_date.get(stat.stat_date, Decimal("0")) + stat.cost
+            )
         total_days = max(1, (date_to - date_from).days)
         previous_cost = sum(
             (cost for stat_date, cost in costs_by_date.items() if stat_date < date_to),
@@ -295,38 +311,186 @@ class YandexDirectService:
         lines.append("Обновление поставлено в очередь.")
         return Notification("\n".join(lines))
 
-    def today_notification(self, session: Session) -> Notification:
-        today = datetime.now(UTC).date()
+    @staticmethod
+    def _number(value: Decimal | float | int, places: int = 2) -> str:
+        return f"{float(value):,.{places}f}".replace(",", " ")
+
+    def _period_totals(
+        self,
+        session: Session,
+        *,
+        days: int,
+    ) -> tuple[date, date, int, int, Decimal, Decimal, datetime | None]:
+        date_to = datetime.now(UTC).date()
+        date_from = date_to - timedelta(days=days - 1)
         rows = session.execute(
             select(
                 func.coalesce(func.sum(DirectDailyStat.impressions), 0),
                 func.coalesce(func.sum(DirectDailyStat.clicks), 0),
                 func.coalesce(func.sum(DirectDailyStat.cost), 0),
                 func.coalesce(func.sum(DirectDailyStat.conversions), 0),
-            ).where(DirectDailyStat.stat_date == today)
+                func.max(DirectDailyStat.updated_at),
+            ).where(
+                DirectDailyStat.stat_date >= date_from,
+                DirectDailyStat.stat_date <= date_to,
+            )
         ).one()
+        return (
+            date_from,
+            date_to,
+            int(rows[0]),
+            int(rows[1]),
+            Decimal(rows[2]),
+            Decimal(rows[3]),
+            rows[4],
+        )
+
+    def _period_notification(
+        self,
+        session: Session,
+        *,
+        days: int,
+        title: str,
+    ) -> Notification:
+        date_from, date_to, impressions, clicks, cost, conversions, updated_at = (
+            self._period_totals(session, days=days)
+        )
+        ctr = Decimal(clicks * 100) / Decimal(impressions) if impressions else Decimal("0")
+        cpc = cost / Decimal(clicks) if clicks else Decimal("0")
+        conversion_rate = (
+            conversions * Decimal("100") / Decimal(clicks)
+            if clicks
+            else Decimal("0")
+        )
+        cpa = cost / conversions if conversions else Decimal("0")
+        average_cost = cost / Decimal(days)
+        period = (
+            date_to.strftime("%d.%m.%Y")
+            if days == 1
+            else f"{date_from.strftime('%d.%m')}–{date_to.strftime('%d.%m.%Y')}"
+        )
+        if updated_at is None:
+            freshness = "данные ещё не загружены"
+        else:
+            display = (
+                updated_at.replace(tzinfo=UTC)
+                if updated_at.tzinfo is None
+                else updated_at.astimezone(UTC)
+            )
+            freshness = display.strftime("%d.%m.%Y %H:%M UTC")
         return Notification(
-            "📊 Яндекс Директ сегодня\n"
-            f"Показы: {int(rows[0])}\n"
-            f"Клики: {int(rows[1])}\n"
-            f"Расход: {Decimal(rows[2]):.2f}\n"
-            f"Конверсии: {Decimal(rows[3]):.2f}"
+            f"{title}\n"
+            f"Период: {period}\n\n"
+            f"👁 Показы: {impressions:,}\n"
+            f"🖱 Клики: {clicks:,}\n"
+            f"📈 CTR: {self._number(ctr)}%\n"
+            f"💳 Расход: {self._number(cost)}\n"
+            f"💵 Средний CPC: {self._number(cpc)}\n"
+            f"🎯 Конверсии: {self._number(conversions)}\n"
+            f"✅ CR: {self._number(conversion_rate)}%\n"
+            f"🧾 CPA: {self._number(cpa)}\n"
+            f"📅 Средний расход/день: {self._number(average_cost)}\n\n"
+            f"Обновлено: {freshness}",
+            "warning" if updated_at is None else "info",
+        )
+
+    def overview_notification(self, session: Session) -> Notification:
+        lines = ["📊 Сводка Яндекс Директа"]
+        has_data = False
+        for days, label in ((1, "Сегодня"), (7, "7 дней"), (30, "30 дней")):
+            _, _, impressions, clicks, cost, conversions, updated_at = (
+                self._period_totals(session, days=days)
+            )
+            has_data = has_data or updated_at is not None
+            ctr = clicks / impressions * 100 if impressions else 0
+            lines.extend(
+                [
+                    "",
+                    f"**{label}**",
+                    f"{impressions:,} показов · {clicks:,} кликов · CTR {ctr:.2f}%",
+                    f"{self._number(cost)} расход · {self._number(conversions)} конверсий",
+                ]
+            )
+        if not has_data:
+            lines.extend(
+                [
+                    "",
+                    "Данные ещё не загружены.",
+                    "Нажмите «🔄 Обновить данные».",
+                ]
+            )
+        return Notification("\n".join(lines), "warning" if not has_data else "info")
+
+    def today_notification(self, session: Session) -> Notification:
+        return self._period_notification(
+            session,
+            days=1,
+            title="📊 Яндекс Директ сегодня",
+        )
+
+    def week_notification(self, session: Session) -> Notification:
+        return self._period_notification(
+            session,
+            days=7,
+            title="📊 Яндекс Директ за 7 дней",
+        )
+
+    def month_notification(self, session: Session) -> Notification:
+        return self._period_notification(
+            session,
+            days=30,
+            title="📊 Яндекс Директ за 30 дней",
         )
 
     def campaigns_notification(self, session: Session) -> Notification:
-        campaigns = list(
-            session.scalars(
-                select(DirectCampaignSnapshot)
-                .order_by(DirectCampaignSnapshot.checked_at.desc())
+        date_from = datetime.now(UTC).date() - timedelta(days=29)
+        rows = list(
+            session.execute(
+                select(
+                    DirectCampaignSnapshot.name,
+                    DirectCampaignSnapshot.state,
+                    DirectCampaignSnapshot.status,
+                    func.coalesce(func.sum(DirectDailyStat.impressions), 0),
+                    func.coalesce(func.sum(DirectDailyStat.clicks), 0),
+                    func.coalesce(func.sum(DirectDailyStat.cost), 0),
+                    func.coalesce(func.sum(DirectDailyStat.conversions), 0),
+                )
+                .outerjoin(
+                    DirectDailyStat,
+                    (
+                        DirectDailyStat.account_id
+                        == DirectCampaignSnapshot.account_id
+                    )
+                    & (
+                        DirectDailyStat.campaign_id
+                        == DirectCampaignSnapshot.campaign_id
+                    )
+                    & (DirectDailyStat.stat_date >= date_from),
+                )
+                .group_by(
+                    DirectCampaignSnapshot.id,
+                    DirectCampaignSnapshot.name,
+                    DirectCampaignSnapshot.state,
+                    DirectCampaignSnapshot.status,
+                )
+                .order_by(func.sum(DirectDailyStat.cost).desc())
                 .limit(10)
             )
         )
-        if not campaigns:
-            return Notification("Кампании ещё не загружены. Запустите проверку баланса.", "warning")
-        lines = ["📈 Кампании"]
+        if not rows:
+            return Notification(
+                "Кампании ещё не загружены. Нажмите «🔄 Обновить данные».",
+                "warning",
+            )
+        lines = ["📈 Кампании · последние 30 дней"]
         lines.extend(
-            f"• {item.name} — {item.state}/{item.status}"
-            for item in campaigns
+            (
+                f"\n• **{name}** · {state}/{status}\n"
+                f"  {int(impressions):,} показов · {int(clicks):,} кликов · "
+                f"{self._number(Decimal(cost))} расход · "
+                f"{self._number(Decimal(conversions))} конверсий"
+            )
+            for name, state, status, impressions, clicks, cost, conversions in rows
         )
         return Notification("\n".join(lines))
 
@@ -343,13 +507,15 @@ class YandexDirectService:
                 account,
                 "report",
                 payload={
-                    "date_from": (today - timedelta(days=7)).isoformat(),
+                    "date_from": (today - timedelta(days=29)).isoformat(),
                     "date_to": today.isoformat(),
                 },
             )
         session.commit()
         return Notification(
-            "📄 Отчёт за 7 дней поставлен в очередь."
+            "🔄 Обновление запущено.\n"
+            "Запрашиваю кампании и метрики за 30 дней. "
+            "Когда Яндекс Директ подготовит отчёт, бот пришлёт результат автоматически."
             if accounts
             else "Аккаунт Яндекс Директа ещё не настроен.",
             "info" if accounts else "warning",
@@ -378,7 +544,11 @@ class YandexDirectService:
         return Notification("\n".join(lines), "warning")
 
     def settings_notification(self, session: Session) -> Notification:
-        accounts = list(session.scalars(select(YandexDirectAccount).order_by(YandexDirectAccount.name)))
+        accounts = list(
+            session.scalars(
+                select(YandexDirectAccount).order_by(YandexDirectAccount.name)
+            )
+        )
         if not accounts:
             return Notification("⚙️ Аккаунты Яндекс Директа не настроены.", "warning")
         lines = ["⚙️ Настройки мониторинга"]

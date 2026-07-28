@@ -11,7 +11,7 @@ from ....dependencies import Principal, get_principal
 from ....security import constant_time_equal, decrypt_secret, hash_token
 from ...notifications.service import InteractionRegistry
 from .client import MaxApiClient
-from .formatter import menu_payload, notification_payload
+from .formatter import menu_payload, notification_payload, waiting_payload
 from .models import MaxBotConfig, MaxUpdate
 from .schemas import MaxBotCreate, MaxBotCreated, MaxBotRead, MaxBotUpdate
 from .service import MaxBotService
@@ -50,6 +50,24 @@ def _message_text(update: dict[str, Any]) -> str:
 def _callback_action(update: dict[str, Any]) -> str:
     callback = update.get("callback") or {}
     return str(callback.get("payload") or "").strip()
+
+
+def _callback_id(update: dict[str, Any]) -> str:
+    callback = update.get("callback") or {}
+    return str(callback.get("callback_id") or "").strip()
+
+
+COMMAND_ACTIONS = {
+    "/summary": "direct.overview",
+    "/today": "direct.today",
+    "/week": "direct.week",
+    "/month": "direct.month",
+    "/campaigns": "direct.campaigns",
+    "/balance": "direct.balance",
+    "/alerts": "direct.alerts",
+    "/refresh": "direct.refresh",
+    "/settings": "direct.settings",
+}
 
 
 @router.get("/integrations/max/bots", response_model=list[MaxBotRead])
@@ -190,13 +208,39 @@ def max_webhook(
     if update_type in {"bot_started", "bot_added"} or text in {"/start", "/menu"}:
         service.queue(session, bot, target_type, target_id, menu_payload(interactions))
     elif update_type == "message_callback":
-        notification = interactions.handle(_callback_action(update), session)
+        action = _callback_action(update)
+        wait_payload = waiting_payload(interactions.label_for(action))
+        callback_answered = False
+        callback_id = _callback_id(update)
+        if callback_id:
+            try:
+                MaxApiClient(
+                    decrypt_secret(bot.token_encrypted),
+                    verify_tls=service.settings.max_api_tls_verify,
+                ).answer_callback(callback_id, wait_payload)
+                callback_answered = True
+            except Exception:  # noqa: BLE001
+                # The result still goes through the durable outbox if MAX cannot
+                # acknowledge the callback immediately.
+                callback_answered = False
+        if not callback_answered:
+            service.queue(session, bot, target_type, target_id, wait_payload)
+        notification = interactions.handle(action, session)
         service.queue(
             session,
             bot,
             target_type,
             target_id,
-            notification_payload(notification),
+            notification_payload(notification, interactions),
+        )
+    elif text in COMMAND_ACTIONS:
+        action = COMMAND_ACTIONS[text]
+        service.queue(
+            session,
+            bot,
+            target_type,
+            target_id,
+            notification_payload(interactions.handle(action, session), interactions),
         )
     session.commit()
     return {"accepted": True}

@@ -17,13 +17,20 @@ class YandexDirectModule(RouterModule):
         service = YandexDirectService(context.services.get(EventBusService))
         context.services.add(YandexDirectService, service)
         interactions = context.services.get(InteractionRegistry)
-        interactions.register("direct.balance", "💰 Баланс", service.balance_notification, row=10)
-        interactions.register("direct.today", "📊 Сегодня", service.today_notification, row=10)
         interactions.register(
-            "direct.campaigns", "📈 Кампании", service.campaigns_notification, row=20
+            "direct.overview", "📊 Сводка", service.overview_notification, row=10
         )
-        interactions.register("direct.report", "📄 Отчёт", service.report_notification, row=30)
-        interactions.register("direct.alerts", "⚠️ Алерты", service.alerts_notification, row=30)
+        interactions.register("direct.today", "Сегодня", service.today_notification, row=20)
+        interactions.register("direct.week", "7 дней", service.week_notification, row=20)
+        interactions.register("direct.month", "30 дней", service.month_notification, row=30)
         interactions.register(
-            "direct.settings", "⚙️ Настройки", service.settings_notification, row=40
+            "direct.campaigns", "Кампании", service.campaigns_notification, row=30
+        )
+        interactions.register("direct.balance", "💰 Баланс", service.balance_notification, row=40)
+        interactions.register("direct.alerts", "⚠️ Алерты", service.alerts_notification, row=40)
+        interactions.register(
+            "direct.refresh", "🔄 Обновить данные", service.report_notification, row=50
+        )
+        interactions.register(
+            "direct.settings", "⚙️ Настройки", service.settings_notification, row=50
         )

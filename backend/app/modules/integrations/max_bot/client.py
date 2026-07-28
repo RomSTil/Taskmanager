@@ -60,6 +60,18 @@ class MaxApiClient:
             payload=payload,
         )
 
+    def answer_callback(
+        self,
+        callback_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/answers",
+            params={"callback_id": callback_id},
+            payload={"message": payload},
+        )
+
     def register_webhook(
         self,
         url: str,

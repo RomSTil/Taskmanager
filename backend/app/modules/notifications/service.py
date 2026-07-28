@@ -50,6 +50,12 @@ class InteractionRegistry:
             return Notification("Действие пока недоступно.", "warning")
         return handler(session)
 
+    def label_for(self, action: str) -> str:
+        return next(
+            (item.label for item in self._actions if item.action == action),
+            "данные",
+        )
+
     def menu_rows(self) -> list[list[MenuAction]]:
         rows: dict[int, list[MenuAction]] = {}
         for action in self._actions:
@@ -90,11 +96,29 @@ class NotificationService:
                 "critical",
             )
         if event.event_type == "ReportGenerated":
+            impressions = int(payload.get("impressions", 0))
+            clicks = int(payload.get("clicks", 0))
+            cost = float(payload.get("cost", 0))
+            conversions = float(payload.get("conversions", 0))
+            ctr = clicks / impressions * 100 if impressions else 0
+            cpc = cost / clicks if clicks else 0
+            cpa = cost / conversions if conversions else 0
             return Notification(
-                "📄 Отчёт Яндекс Директа готов\n"
+                "✅ Данные Яндекс Директа обновлены\n"
                 f"Аккаунт: {payload.get('account_name', event.aggregate_id)}\n"
                 f"Период: {payload.get('date_from')} — {payload.get('date_to')}\n"
-                f"Строк: {payload.get('rows', 0)}"
+                f"Показы: {impressions:,}\n"
+                f"Клики: {clicks:,} · CTR: {ctr:.2f}%\n"
+                f"Расход: {cost:,.2f} · CPC: {cpc:,.2f}\n"
+                f"Конверсии: {conversions:.2f} · CPA: {cpa:,.2f}"
+            )
+        if event.event_type == "DirectSyncFailed":
+            return Notification(
+                "❌ Не удалось обновить Яндекс Директ\n"
+                f"Аккаунт: {payload.get('account_name', event.aggregate_id)}\n"
+                f"Причина: {payload.get('error', 'неизвестная ошибка')}\n\n"
+                "Проверьте OAuth-токен и статус заявки на доступ к API.",
+                "critical",
             )
         return Notification(f"{event.event_type}: {event.payload}")
 

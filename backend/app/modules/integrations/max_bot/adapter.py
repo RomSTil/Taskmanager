@@ -2,13 +2,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...event_bus.models import DomainEvent
-from ...notifications.service import Notification
+from ...notifications.service import InteractionRegistry, Notification
 from .formatter import notification_payload
 from .models import MaxBotConfig, MaxOutboxMessage
 
 
 class MaxNotificationTransport:
     """MAX transport adapter; it only understands neutral notifications."""
+
+    def __init__(self, interactions: InteractionRegistry) -> None:
+        self.interactions = interactions
 
     def enqueue(
         self,
@@ -41,7 +44,7 @@ class MaxNotificationTransport:
                     event_id=event.id,
                     target_type=str(bot.target_type),
                     target_id=int(bot.target_id or 0),
-                    payload=notification_payload(notification),
+                    payload=notification_payload(notification, self.interactions),
                 )
             )
             queued += 1

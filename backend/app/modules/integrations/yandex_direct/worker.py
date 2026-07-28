@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from ...event_bus.events import DirectSyncFailed
 from .client import DirectApiError, DirectReportPending
 from .models import IntegrationJob, YandexDirectAccount
 from .service import YandexDirectService
@@ -109,6 +110,16 @@ def process_direct_jobs(
                 account = session.get(YandexDirectAccount, job.account_id)
                 if account:
                     account.last_error = job.error
+                    if job.status == "failed":
+                        service.event_bus.publish(
+                            session,
+                            DirectSyncFailed(
+                                account_id=account.id,
+                                account_name=account.name,
+                                error=job.error,
+                            ),
+                            deduplication_key=f"DirectSyncFailed:{job.id}",
+                        )
         except Exception as exc:
             session.rollback()
             job = session.get(IntegrationJob, job.id)
@@ -124,5 +135,15 @@ def process_direct_jobs(
                 account = session.get(YandexDirectAccount, job.account_id)
                 if account:
                     account.last_error = job.error
+                    if job.status == "failed":
+                        service.event_bus.publish(
+                            session,
+                            DirectSyncFailed(
+                                account_id=account.id,
+                                account_name=account.name,
+                                error=job.error,
+                            ),
+                            deduplication_key=f"DirectSyncFailed:{job.id}",
+                        )
         session.commit()
     return completed
