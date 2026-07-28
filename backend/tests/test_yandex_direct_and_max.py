@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.modules.event_bus.models import DomainEvent
 from app.modules.integrations.max_bot.client import MaxApiClient
-from app.modules.integrations.max_bot.models import MaxOutboxMessage
+from app.modules.integrations.max_bot.models import (
+    MaxAccessRequest,
+    MaxBotConfig,
+    MaxOutboxMessage,
+)
 from app.modules.integrations.yandex_direct.client import DirectApiError, YandexDirectClient
 from app.modules.integrations.yandex_direct.models import DirectDailyStat, IntegrationJob
 from app.modules.integrations.yandex_direct.service import YandexDirectService
@@ -396,6 +400,131 @@ def test_max_callback_answers_with_waiting_state_and_returns_metrics(
     assert "CPA: 50.00" in messages[0].payload["text"]
     buttons = messages[0].payload["attachments"][0]["payload"]["buttons"]
     assert buttons[0][0]["payload"] == "direct.overview"
+
+
+def test_max_unknown_user_is_moderated_and_owner_can_approve(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/max/bots",
+        headers=auth_headers,
+        json={
+            "name": "Moderated",
+            "token": "max-moderated-token-with-enough-length",
+            "target_type": "user",
+            "target_id": 42,
+        },
+    )
+    assert created.status_code == 201, created.text
+    bot = created.json()
+    headers = {"X-Max-Bot-Api-Secret": bot["webhook_secret"]}
+    url = f"/api/v1/webhooks/max/{bot['id']}"
+    unknown = {
+        "update_type": "message_created",
+        "timestamp": int(datetime.now(UTC).timestamp() * 1000),
+        "message": {
+            "sender": {"user_id": 77, "name": "New User"},
+            "recipient": {"user_id": 77},
+            "body": {"text": "/start"},
+        },
+    }
+
+    assert client.post(url, headers=headers, json=unknown).status_code == 200
+    request = db_session.scalar(
+        select(MaxAccessRequest).where(MaxAccessRequest.user_id == 77)
+    )
+    assert request
+    assert request.status == "pending"
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert len(messages) == 2
+    assert any("ожидает подтверждения" in item.payload["text"] for item in messages)
+    moderation = next(
+        item for item in messages if "Запрос доступа" in item.payload["text"]
+    )
+    buttons = moderation.payload["attachments"][0]["payload"]["buttons"]
+    assert buttons[0][0]["payload"] == f"max.access.approve:{request.id}"
+    assert buttons[0][1]["payload"] == f"max.access.deny:{request.id}"
+
+    repeated = {**unknown, "timestamp": unknown["timestamp"] + 1}
+    assert client.post(url, headers=headers, json=repeated).status_code == 200
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert sum("Запрос доступа" in item.payload["text"] for item in messages) == 1
+
+    approve = {
+        "update_type": "message_callback",
+        "timestamp": unknown["timestamp"] + 2,
+        "callback": {
+            "callback_id": "approve-callback",
+            "payload": f"max.access.approve:{request.id}",
+        },
+        "user": {"user_id": 42, "name": "Owner"},
+    }
+    assert client.post(url, headers=headers, json=approve).status_code == 200
+    db_session.refresh(request)
+    assert request.status == "approved"
+    assert request.reviewed_by == 42
+    stored_bot = db_session.get(MaxBotConfig, bot["id"])
+    assert stored_bot
+    db_session.refresh(stored_bot)
+    assert 77 in stored_bot.allowlist
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert any("Доступ одобрен" in item.payload["text"] for item in messages)
+
+    allowed = {**unknown, "timestamp": unknown["timestamp"] + 3}
+    assert client.post(url, headers=headers, json=allowed).status_code == 200
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert "Яндекс Директ" in messages[-1].payload["text"]
+
+
+def test_max_owner_can_deny_unknown_user(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/max/bots",
+        headers=auth_headers,
+        json={
+            "name": "Denied",
+            "token": "max-denied-token-with-enough-length",
+            "target_type": "user",
+            "target_id": 42,
+        },
+    )
+    bot = created.json()
+    headers = {"X-Max-Bot-Api-Secret": bot["webhook_secret"]}
+    url = f"/api/v1/webhooks/max/{bot['id']}"
+    timestamp = int(datetime.now(UTC).timestamp() * 1000)
+    unknown = {
+        "update_type": "message_created",
+        "timestamp": timestamp,
+        "message": {
+            "sender": {"user_id": 88, "name": "Denied User"},
+            "recipient": {"user_id": 88},
+            "body": {"text": "/start"},
+        },
+    }
+    assert client.post(url, headers=headers, json=unknown).status_code == 200
+    request = db_session.scalar(
+        select(MaxAccessRequest).where(MaxAccessRequest.user_id == 88)
+    )
+    assert request
+    deny = {
+        "update_type": "message_callback",
+        "timestamp": timestamp + 1,
+        "callback": {
+            "callback_id": "deny-callback",
+            "payload": f"max.access.deny:{request.id}",
+        },
+        "user": {"user_id": 42, "name": "Owner"},
+    }
+    assert client.post(url, headers=headers, json=deny).status_code == 200
+    db_session.refresh(request)
+    assert request.status == "denied"
+    messages = list(db_session.scalars(select(MaxOutboxMessage)))
+    assert any("не одобрил доступ" in item.payload["text"] for item in messages)
 
 
 def test_max_client_uses_authorization_header_and_user_target() -> None:

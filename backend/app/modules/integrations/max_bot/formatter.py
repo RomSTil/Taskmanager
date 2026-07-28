@@ -41,6 +41,65 @@ def waiting_payload(action_label: str) -> dict:
     }
 
 
+def access_request_payload(
+    request_id: str,
+    *,
+    display_name: str,
+    user_id: int,
+) -> dict:
+    return {
+        "text": (
+            "🔐 **Запрос доступа к боту**\n"
+            f"Пользователь: {display_name}\n"
+            f"MAX ID: `{user_id}`\n\n"
+            "Разрешить ему просмотр статистики Яндекс Директа?"
+        ),
+        "format": "markdown",
+        "notify": True,
+        "attachments": [
+            {
+                "type": "inline_keyboard",
+                "payload": {
+                    "buttons": [
+                        [
+                            {
+                                "type": "callback",
+                                "text": "✅ Принять",
+                                "payload": f"max.access.approve:{request_id}",
+                            },
+                            {
+                                "type": "callback",
+                                "text": "❌ Отклонить",
+                                "payload": f"max.access.deny:{request_id}",
+                            },
+                        ]
+                    ]
+                },
+            }
+        ],
+    }
+
+
+def access_pending_payload() -> dict:
+    return {
+        "text": (
+            "⏳ **Доступ ожидает подтверждения**\n"
+            "Заявка отправлена владельцу бота. "
+            "После решения я пришлю отдельное сообщение."
+        ),
+        "format": "markdown",
+        "notify": True,
+    }
+
+
+def access_denied_payload() -> dict:
+    return {
+        "text": "⛔ Владелец бота не одобрил доступ.",
+        "format": "markdown",
+        "notify": True,
+    }
+
+
 def menu_payload(interactions: InteractionRegistry) -> dict:
     return {
         "text": (

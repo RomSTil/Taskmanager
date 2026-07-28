@@ -11,7 +11,14 @@ from ....dependencies import Principal, get_principal
 from ....security import constant_time_equal, decrypt_secret, hash_token
 from ...notifications.service import InteractionRegistry
 from .client import MaxApiClient
-from .formatter import menu_payload, notification_payload, waiting_payload
+from .formatter import (
+    access_denied_payload,
+    access_pending_payload,
+    access_request_payload,
+    menu_payload,
+    notification_payload,
+    waiting_payload,
+)
 from .models import MaxBotConfig, MaxUpdate
 from .schemas import MaxBotCreate, MaxBotCreated, MaxBotRead, MaxBotUpdate
 from .service import MaxBotService
@@ -31,7 +38,8 @@ def get_interactions(request: Request) -> InteractionRegistry:
 def _target(update: dict[str, Any]) -> tuple[str, int, int | None] | None:
     message = update.get("message") or {}
     recipient = message.get("recipient") or {}
-    sender = message.get("sender") or update.get("user") or {}
+    callback = update.get("callback") or {}
+    sender = message.get("sender") or update.get("user") or callback.get("user") or {}
     chat_id = update.get("chat_id") or recipient.get("chat_id")
     user_id = sender.get("user_id") or update.get("user_id")
     if chat_id:
@@ -55,6 +63,29 @@ def _callback_action(update: dict[str, Any]) -> str:
 def _callback_id(update: dict[str, Any]) -> str:
     callback = update.get("callback") or {}
     return str(callback.get("callback_id") or "").strip()
+
+
+def _sender_name(update: dict[str, Any], user_id: int) -> str:
+    message = update.get("message") or {}
+    callback = update.get("callback") or {}
+    sender = message.get("sender") or update.get("user") or callback.get("user") or {}
+    return str(
+        sender.get("name")
+        or sender.get("username")
+        or sender.get("first_name")
+        or f"Пользователь {user_id}"
+    ).strip()[:160]
+
+
+def _moderation_action(action: str) -> tuple[str, str] | None:
+    prefix, separator, request_id = action.partition(":")
+    if not separator or not request_id:
+        return None
+    if prefix == "max.access.approve":
+        return "approved", request_id
+    if prefix == "max.access.deny":
+        return "denied", request_id
+    return None
 
 
 COMMAND_ACTIONS = {
@@ -197,18 +228,123 @@ def max_webhook(
         session.commit()
         return {"accepted": True}
     target_type, target_id, user_id = target
-    if bot.allowlist and target_id not in bot.allowlist and user_id not in bot.allowlist:
-        session.commit()
-        return {"accepted": True}
     if bot.target_id is None and update_type in {"bot_started", "bot_added", "message_created"}:
         bot.target_type = target_type
         bot.target_id = target_id
+        if user_id is not None:
+            bot.owner_user_id = user_id
+            bot.allowlist = list(dict.fromkeys([*bot.allowlist, user_id]))
         bot.version += 1
+    action = _callback_action(update) if update_type == "message_callback" else ""
+    moderation = _moderation_action(action)
+    is_owner = user_id is not None and user_id == bot.owner_user_id
+    if moderation and is_owner and user_id is not None:
+        decision, request_id = moderation
+        try:
+            access = service.review_access(
+                session,
+                bot,
+                request_id,
+                decision=decision,
+                reviewer_id=user_id,
+            )
+        except LookupError:
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                {"text": "Заявка не найдена.", "format": "markdown", "notify": True},
+            )
+        else:
+            approved = access.status == "approved"
+            applicant_payload = (
+                menu_payload(interactions)
+                if approved
+                else access_denied_payload()
+            )
+            if approved:
+                applicant_payload["text"] = (
+                    "✅ **Доступ одобрен**\n"
+                    "Теперь вам доступна статистика Яндекс Директа.\n\n"
+                    + applicant_payload["text"]
+                )
+            service.queue(
+                session,
+                bot,
+                access.target_type,
+                access.target_id,
+                applicant_payload,
+            )
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                notification_payload(
+                    interactions.handle("direct.settings", session),
+                    interactions,
+                )
+                | {
+                    "text": (
+                        f"{'✅ Доступ разрешён' if approved else '❌ Доступ отклонён'}\n"
+                        f"{access.display_name} · ID {access.user_id}"
+                    )
+                },
+            )
+        session.commit()
+        return {"accepted": True}
+
+    allowed = is_owner or service.approved_user(session, bot, user_id)
+    if not allowed:
+        if user_id is None:
+            session.commit()
+            return {"accepted": True}
+        access, created = service.access_request(
+            session,
+            bot,
+            user_id=user_id,
+            display_name=_sender_name(update, user_id),
+            target_type=target_type,
+            target_id=target_id,
+        )
+        if access.status == "denied":
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                access_denied_payload(),
+            )
+        elif access.status == "approved":
+            allowed = True
+        else:
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                access_pending_payload(),
+            )
+            if created and bot.target_type and bot.target_id is not None:
+                service.queue(
+                    session,
+                    bot,
+                    bot.target_type,
+                    int(bot.target_id),
+                    access_request_payload(
+                        access.id,
+                        display_name=access.display_name,
+                        user_id=access.user_id,
+                    ),
+                )
+        if not allowed:
+            session.commit()
+            return {"accepted": True}
     text = _message_text(update).casefold()
     if update_type in {"bot_started", "bot_added"} or text in {"/start", "/menu"}:
         service.queue(session, bot, target_type, target_id, menu_payload(interactions))
     elif update_type == "message_callback":
-        action = _callback_action(update)
         wait_payload = waiting_payload(interactions.label_for(action))
         callback_answered = False
         callback_id = _callback_id(update)

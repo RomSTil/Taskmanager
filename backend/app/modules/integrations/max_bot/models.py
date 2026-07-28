@@ -31,6 +31,7 @@ class MaxBotConfig(TimestampMixin, VersionMixin, Base):
     allowlist: Mapped[list[int]] = mapped_column(JSON, default=list)
     target_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     target_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -48,6 +49,27 @@ class MaxUpdate(Base):
     update_key: Mapped[str] = mapped_column(String(64))
     update_type: Mapped[str] = mapped_column(String(80))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MaxAccessRequest(Base):
+    __tablename__ = "max_access_requests"
+    __table_args__ = (
+        UniqueConstraint("bot_id", "user_id", name="uq_max_access_bot_user"),
+        Index("ix_max_access_status", "bot_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    bot_id: Mapped[str] = mapped_column(
+        ForeignKey("max_bot_configs.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    target_type: Mapped[str] = mapped_column(String(16))
+    target_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    reviewed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MaxOutboxMessage(Base):
