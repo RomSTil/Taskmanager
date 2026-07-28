@@ -289,6 +289,14 @@ export class TaskmanApi {
     }, true);
   }
 
+  deleteDirectAccount(accountId: string): Promise<void> {
+    return this.request<void>(
+      `/integrations/yandex-direct/accounts/${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
   createDirectJob(accountId: string, jobType: "balance_check" | "campaign_sync" | "report"): Promise<DirectJob> {
     return this.request<DirectJob>(
       `/integrations/yandex-direct/accounts/${encodeURIComponent(accountId)}/jobs`,
@@ -317,6 +325,14 @@ export class TaskmanApi {
       method: "POST",
       body: JSON.stringify(input),
     }, true);
+  }
+
+  deleteMaxBot(botId: string): Promise<void> {
+    return this.request<void>(
+      `/integrations/max/bots/${encodeURIComponent(botId)}`,
+      { method: "DELETE" },
+      true,
+    );
   }
 
   registerMaxWebhook(botId: string): Promise<Record<string, unknown>> {

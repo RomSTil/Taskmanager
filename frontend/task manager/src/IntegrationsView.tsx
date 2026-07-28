@@ -40,11 +40,15 @@ function wait(milliseconds: number): Promise<void> {
 function DirectAccountCard({
   account,
   refreshing,
+  deleting,
   onRefresh,
+  onDelete,
 }: {
   account: DirectAccount;
   refreshing: boolean;
+  deleting: boolean;
   onRefresh: (account: DirectAccount) => void;
+  onDelete: (account: DirectAccount) => void;
 }) {
   return (
     <article className="integration-card">
@@ -59,19 +63,39 @@ function DirectAccountCard({
       </div>
       <p className="integration-meta">Последняя проверка: {displayDate(account.last_checked_at)}</p>
       {account.last_error && <p className="integration-error">Последняя ошибка: {account.last_error}</p>}
-      <button
-        className="secondary-button integration-action"
-        type="button"
-        onClick={() => onRefresh(account)}
-        disabled={refreshing || !account.enabled}
-      >
-        {refreshing ? "Проверяем…" : "Проверить сейчас"}
-      </button>
+      <div className="integration-card-actions">
+        <button
+          className="secondary-button integration-action"
+          type="button"
+          onClick={() => onRefresh(account)}
+          disabled={refreshing || deleting || !account.enabled}
+        >
+          {refreshing ? "Проверяем…" : "Проверить сейчас"}
+        </button>
+        <button
+          className="danger-button integration-action"
+          type="button"
+          onClick={() => onDelete(account)}
+          disabled={refreshing || deleting}
+        >
+          {deleting ? "Удаляем…" : "Удалить аккаунт"}
+        </button>
+      </div>
     </article>
   );
 }
 
-function MaxBotCard({ bot, onRegister }: { bot: MaxBot; onRegister: (bot: MaxBot) => void }) {
+function MaxBotCard({
+  bot,
+  deleting,
+  onRegister,
+  onDelete,
+}: {
+  bot: MaxBot;
+  deleting: boolean;
+  onRegister: (bot: MaxBot) => void;
+  onDelete: (bot: MaxBot) => void;
+}) {
   return (
     <article className="integration-card">
       <div className="integration-card-heading">
@@ -84,7 +108,12 @@ function MaxBotCard({ bot, onRegister }: { bot: MaxBot; onRegister: (bot: MaxBot
         <span>Ограничение <strong>{bot.allowlist.length ? `${bot.allowlist.length} пользователей` : "нет allowlist"}</strong></span>
       </div>
       {bot.last_error && <p className="integration-error">Последняя ошибка: {bot.last_error}</p>}
-      <button className="secondary-button integration-action" type="button" onClick={() => onRegister(bot)}>Перерегистрировать webhook</button>
+      <div className="integration-card-actions">
+        <button className="secondary-button integration-action" type="button" onClick={() => onRegister(bot)} disabled={deleting}>Перерегистрировать webhook</button>
+        <button className="danger-button integration-action" type="button" onClick={() => onDelete(bot)} disabled={deleting}>
+          {deleting ? "Удаляем…" : "Удалить бота"}
+        </button>
+      </div>
     </article>
   );
 }
@@ -98,6 +127,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
+  const [deletingConnectionId, setDeletingConnectionId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -168,6 +198,22 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
     }
   }
 
+  async function deleteDirectAccount(account: DirectAccount) {
+    if (!window.confirm(`Удалить подключение Яндекс Директа «${account.name}»? Отменить это действие будет нельзя.`)) return;
+    setDeletingConnectionId(account.id);
+    setError("");
+    setMessage("");
+    try {
+      await api.deleteDirectAccount(account.id);
+      setAccounts((current) => current.filter((item) => item.id !== account.id));
+      setMessage(`Подключение Яндекс Директа «${account.name}» удалено.`);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setDeletingConnectionId(null);
+    }
+  }
+
   async function registerWebhook(bot: MaxBot) {
     setBusy(true);
     setError("");
@@ -213,6 +259,22 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
     }
   }
 
+  async function deleteMaxBot(bot: MaxBot) {
+    if (!window.confirm(`Удалить MAX-бота «${bot.name}»? Его webhook и настройки будут удалены без возможности восстановления.`)) return;
+    setDeletingConnectionId(bot.id);
+    setError("");
+    setMessage("");
+    try {
+      await api.deleteMaxBot(bot.id);
+      setBots((current) => current.filter((item) => item.id !== bot.id));
+      setMessage(`MAX-бот «${bot.name}» удалён.`);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setDeletingConnectionId(null);
+    }
+  }
+
   return (
     <section className="integrations-page">
       <div className="integrations-intro">
@@ -237,7 +299,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
             </div>
             <button className="primary-button" type="submit" disabled={busy}>Добавить аккаунт</button>
           </form>
-          <div className="integration-list">{loading ? <div className="loading-line">Загружаем аккаунты…</div> : accounts.length ? accounts.map((account) => <DirectAccountCard account={account} refreshing={refreshingAccountId === account.id} onRefresh={refreshDirectAccount} key={account.id} />) : <div className="integration-empty">Аккаунт ещё не подключён.</div>}</div>
+          <div className="integration-list">{loading ? <div className="loading-line">Загружаем аккаунты…</div> : accounts.length ? accounts.map((account) => <DirectAccountCard account={account} refreshing={refreshingAccountId === account.id} deleting={deletingConnectionId === account.id} onRefresh={refreshDirectAccount} onDelete={deleteDirectAccount} key={account.id} />) : <div className="integration-empty">Аккаунт ещё не подключён.</div>}</div>
         </div>
 
         <div className="integration-column">
@@ -249,7 +311,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
             <p className="form-hint">После создания приложение автоматически зарегистрирует webhook. Сервер должен быть доступен по публичному HTTPS-адресу.</p>
             <button className="primary-button" type="submit" disabled={busy}>Подключить MAX</button>
           </form>
-          <div className="integration-list">{loading ? <div className="loading-line">Загружаем ботов…</div> : bots.length ? bots.map((bot) => <MaxBotCard bot={bot} onRegister={registerWebhook} key={bot.id} />) : <div className="integration-empty">MAX-бот ещё не подключён.</div>}</div>
+          <div className="integration-list">{loading ? <div className="loading-line">Загружаем ботов…</div> : bots.length ? bots.map((bot) => <MaxBotCard bot={bot} deleting={deletingConnectionId === bot.id} onRegister={registerWebhook} onDelete={deleteMaxBot} key={bot.id} />) : <div className="integration-empty">MAX-бот ещё не подключён.</div>}</div>
         </div>
       </div>
     </section>

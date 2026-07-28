@@ -137,7 +137,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .integration-details code, .integration-secret code { overflow-wrap: anywhere; color: var(--accent-dark); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .integration-meta { margin: 13px 0 0; color: var(--muted); font-size: 11px; }
 .integration-error { margin: 10px 0 0; color: #9d321e; font-size: 11px; line-height: 1.45; }
-.integration-action { margin-top: 14px; min-height: 36px; }
+.integration-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.integration-action { min-height: 36px; }
 .integration-empty { padding: 20px; border: 1px dashed #cfc8b9; border-radius: 14px; color: var(--muted); text-align: center; font-size: 13px; }
 .integration-success, .integration-secret { margin-top: 14px; padding: 13px 15px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
 .integration-success { border-left: 3px solid #6c965b; background: #eaf2e5; color: #486b3d; }
