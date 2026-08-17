@@ -12,8 +12,11 @@ import type {
   WorkspaceBootstrap,
   DirectAccount,
   DirectJob,
+  MarketAccount,
+  MarketOrder,
   MaxBot,
   MaxBotCreated,
+  MaxAccessRequest,
 } from "./types";
 
 const API_URL_KEY = "taskman.apiUrl";
@@ -316,11 +319,52 @@ export class TaskmanApi {
     );
   }
 
+  listMarketAccounts(): Promise<MarketAccount[]> {
+    return this.request<MarketAccount[]>("/integrations/yandex-market/accounts", {}, true);
+  }
+
+  createMarketAccount(input: {
+    name: string;
+    campaign_id: number;
+    api_key: string;
+    poll_interval_seconds: number;
+  }): Promise<MarketAccount> {
+    return this.request<MarketAccount>("/integrations/yandex-market/accounts", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }, true);
+  }
+
+  deleteMarketAccount(accountId: string): Promise<void> {
+    return this.request<void>(
+      `/integrations/yandex-market/accounts/${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
+  syncMarketAccount(accountId: string): Promise<{ new_orders: number }> {
+    return this.request<{ new_orders: number }>(
+      `/integrations/yandex-market/accounts/${encodeURIComponent(accountId)}/sync`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  listMarketOrders(): Promise<MarketOrder[]> {
+    return this.request<MarketOrder[]>("/integrations/yandex-market/orders", {}, true);
+  }
+
   listMaxBots(): Promise<MaxBot[]> {
     return this.request<MaxBot[]>("/integrations/max/bots", {}, true);
   }
 
-  createMaxBot(input: { name: string; token: string; allowlist: number[] }): Promise<MaxBotCreated> {
+  createMaxBot(input: {
+    name: string;
+    token: string;
+    integration: "direct" | "market";
+    allowlist: number[];
+  }): Promise<MaxBotCreated> {
     return this.request<MaxBotCreated>("/integrations/max/bots", {
       method: "POST",
       body: JSON.stringify(input),
@@ -339,6 +383,26 @@ export class TaskmanApi {
     return this.request<Record<string, unknown>>(
       `/integrations/max/bots/${encodeURIComponent(botId)}/register-webhook`,
       { method: "POST" },
+      true,
+    );
+  }
+
+  listMaxAccessRequests(botId: string): Promise<MaxAccessRequest[]> {
+    return this.request<MaxAccessRequest[]>(
+      `/integrations/max/bots/${encodeURIComponent(botId)}/access-requests`,
+      {},
+      true,
+    );
+  }
+
+  updateMaxAccessRequest(
+    botId: string,
+    requestId: string,
+    input: { status: "approved" | "denied"; role?: "viewer" | "picker" | "admin" },
+  ): Promise<MaxAccessRequest> {
+    return this.request<MaxAccessRequest>(
+      `/integrations/max/bots/${encodeURIComponent(botId)}/access-requests/${encodeURIComponent(requestId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
       true,
     );
   }

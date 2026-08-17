@@ -234,3 +234,34 @@ class MaxBotService:
             bot.allowlist = list(dict.fromkeys([*bot.allowlist, request.user_id]))
             bot.version += 1
         return request
+
+    def manage_access(
+        self,
+        session: Session,
+        bot: MaxBotConfig,
+        request_id: str,
+        *,
+        decision: str,
+        role: str | None,
+    ) -> MaxAccessRequest:
+        request = session.get(MaxAccessRequest, request_id)
+        if request is None or request.bot_id != bot.id:
+            raise LookupError("MAX access request not found")
+        if decision == "approved" and role is None:
+            raise ValueError("Role is required for approved access")
+        request.status = decision
+        if role is not None:
+            request.role = role
+        request.reviewed_by = bot.owner_user_id
+        request.reviewed_at = datetime.now(UTC)
+        allowlist = list(bot.allowlist)
+        if decision == "approved" and request.user_id not in allowlist:
+            allowlist.append(request.user_id)
+        if decision == "denied" and request.user_id in allowlist:
+            allowlist.remove(request.user_id)
+        if allowlist != bot.allowlist:
+            bot.allowlist = allowlist
+            bot.version += 1
+        session.commit()
+        session.refresh(request)
+        return request

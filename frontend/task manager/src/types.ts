@@ -189,10 +189,49 @@ export interface DirectJob {
   created_at: string;
 }
 
+export interface MarketAccount {
+  id: string;
+  name: string;
+  campaign_id: number;
+  api_key_hint: string;
+  enabled: boolean;
+  poll_interval_seconds: number;
+  last_polled_at: string | null;
+  last_error: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketOrderItem {
+  offerId?: string;
+  offerName?: string;
+  count?: number;
+  [key: string]: unknown;
+}
+
+export interface MarketOrder {
+  id: string;
+  account_id: string;
+  market_order_id: number;
+  status: string;
+  substatus: string | null;
+  items: MarketOrderItem[];
+  pack_state: "new" | "pending" | "packed" | "failed" | string;
+  pack_requested_by: number | null;
+  pack_requested_name: string | null;
+  pack_requested_at: string | null;
+  packed_at: string | null;
+  pack_error: string | null;
+  discovered_at: string;
+  last_seen_at: string;
+}
+
 export interface MaxBot {
   id: string;
   name: string;
   token_hint: string;
+  integration: "direct" | "market";
   allowlist: number[];
   target_type: string | null;
   target_id: number | null;
@@ -206,4 +245,18 @@ export interface MaxBot {
 
 export interface MaxBotCreated extends MaxBot {
   webhook_secret: string;
+}
+
+export interface MaxAccessRequest {
+  id: string;
+  bot_id: string;
+  user_id: number;
+  display_name: string;
+  target_type: string;
+  target_id: number;
+  status: "pending" | "approved" | "denied";
+  role: "viewer" | "picker" | "admin";
+  reviewed_by: number | null;
+  requested_at: string;
+  reviewed_at: string | null;
 }

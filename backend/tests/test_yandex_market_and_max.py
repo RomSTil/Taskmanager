@@ -131,6 +131,19 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
         select(MaxAccessRequest).where(MaxAccessRequest.user_id == 77)
     )
     assert access
+    access_response = client.get(
+        f"/api/v1/integrations/max/bots/{bot['id']}/access-requests",
+        headers=auth_headers,
+    )
+    assert access_response.status_code == 200, access_response.text
+    assert access_response.json()[0]["display_name"] == "Сборщик Анна"
+    role_response = client.patch(
+        f"/api/v1/integrations/max/bots/{bot['id']}/access-requests/{access.id}",
+        headers=auth_headers,
+        json={"status": "approved", "role": "picker"},
+    )
+    assert role_response.status_code == 200, role_response.text
+    assert role_response.json()["role"] == "picker"
     moderation = next(
         message
         for message in db_session.scalars(select(MaxOutboxMessage))

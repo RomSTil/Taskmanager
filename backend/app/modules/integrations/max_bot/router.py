@@ -20,8 +20,15 @@ from .formatter import (
     notification_payload,
     waiting_payload,
 )
-from .models import MaxBotConfig, MaxUpdate
-from .schemas import MaxBotCreate, MaxBotCreated, MaxBotRead, MaxBotUpdate
+from .models import MaxAccessRequest, MaxBotConfig, MaxUpdate
+from .schemas import (
+    MaxAccessRequestRead,
+    MaxAccessRequestUpdate,
+    MaxBotCreate,
+    MaxBotCreated,
+    MaxBotRead,
+    MaxBotUpdate,
+)
 from .service import MaxBotService
 
 router = APIRouter(tags=["max"])
@@ -194,6 +201,58 @@ def register_webhook(
             bot.last_error = f"Webhook registration failed ({type(exc).__name__})"
             session.commit()
         raise HTTPException(status_code=502, detail="MAX rejected webhook registration") from exc
+
+
+@router.get(
+    "/integrations/max/bots/{bot_id}/access-requests",
+    response_model=list[MaxAccessRequestRead],
+)
+def list_access_requests(
+    bot_id: str,
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
+    session: Annotated[Session, Depends(get_session)],
+    service: Annotated[MaxBotService, Depends(get_max_service)],
+) -> list[MaxAccessRequest]:
+    try:
+        service.bot(session, bot_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return list(
+        session.scalars(
+            select(MaxAccessRequest)
+            .where(MaxAccessRequest.bot_id == bot_id)
+            .order_by(MaxAccessRequest.requested_at.desc())
+        )
+    )
+
+
+@router.patch(
+    "/integrations/max/bots/{bot_id}/access-requests/{request_id}",
+    response_model=MaxAccessRequestRead,
+)
+def update_access_request(
+    bot_id: str,
+    request_id: str,
+    payload: MaxAccessRequestUpdate,
+    _: Annotated[Principal, Security(get_principal, scopes=["integrations:manage"])],
+    session: Annotated[Session, Depends(get_session)],
+    service: Annotated[MaxBotService, Depends(get_max_service)],
+) -> MaxAccessRequest:
+    try:
+        bot = service.bot(session, bot_id)
+        if bot.integration == "market" and payload.role == "viewer":
+            raise ValueError("Market users must be picker or admin")
+        return service.manage_access(
+            session,
+            bot,
+            request_id,
+            decision=payload.status,
+            role=payload.role,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/webhooks/max/{bot_id}")

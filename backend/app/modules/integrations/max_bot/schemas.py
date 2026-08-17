@@ -47,3 +47,22 @@ class MaxBotRead(ApiModel):
 
 class MaxBotCreated(MaxBotRead):
     webhook_secret: str
+
+
+class MaxAccessRequestRead(ApiModel):
+    id: str
+    bot_id: str
+    user_id: int
+    display_name: str
+    target_type: str
+    target_id: int
+    status: str
+    role: str
+    reviewed_by: int | None
+    requested_at: datetime
+    reviewed_at: datetime | None
+
+
+class MaxAccessRequestUpdate(ApiModel):
+    status: Literal["approved", "denied"]
+    role: Literal["viewer", "picker", "admin"] | None = None
