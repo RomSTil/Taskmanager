@@ -100,7 +100,8 @@ Backend организован как расширяемый модульный 
 в [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md).
 
 Модули Яндекс Директа, событий, уведомлений и MAX-бота описаны в
-[`docs/YANDEX_DIRECT_MAX.md`](docs/YANDEX_DIRECT_MAX.md).
+[`docs/YANDEX_DIRECT_MAX.md`](docs/YANDEX_DIRECT_MAX.md), а ролевой бот для обработки заказов
+Яндекс Маркета — в [`docs/YANDEX_MARKET_MAX.md`](docs/YANDEX_MARKET_MAX.md).
 
 ## Статус и лицензия
 

@@ -25,6 +25,7 @@ class MaxBotService:
             id=bot.id,
             name=bot.name,
             token_hint=bot.token_hint,
+            integration=bot.integration,
             allowlist=bot.allowlist,
             target_type=bot.target_type,
             target_id=bot.target_id,
@@ -50,6 +51,7 @@ class MaxBotService:
             token_hint=f"…{payload.token[-6:]}",
             webhook_secret_hash=hash_token(secret),
             webhook_secret_encrypted=encrypt_secret(secret),
+            integration=payload.integration,
             allowlist=payload.allowlist,
             target_type=payload.target_type,
             target_id=payload.target_id,
@@ -74,7 +76,14 @@ class MaxBotService:
         bot = self.bot(session, bot_id)
         if bot.version != payload.base_version:
             raise RuntimeError("MAX bot version conflict")
-        for field in ("name", "allowlist", "target_type", "target_id", "enabled"):
+        for field in (
+            "name",
+            "integration",
+            "allowlist",
+            "target_type",
+            "target_id",
+            "enabled",
+        ):
             if field in payload.model_fields_set:
                 setattr(bot, field, getattr(payload, field))
         if payload.token:
@@ -158,6 +167,29 @@ class MaxBotService:
             )
         )
 
+    def user_role(
+        self,
+        session: Session,
+        bot: MaxBotConfig,
+        user_id: int | None,
+    ) -> str | None:
+        if user_id is None:
+            return None
+        if user_id == bot.owner_user_id:
+            return "admin"
+        request = session.scalar(
+            select(MaxAccessRequest).where(
+                MaxAccessRequest.bot_id == bot.id,
+                MaxAccessRequest.user_id == user_id,
+                MaxAccessRequest.status == "approved",
+            )
+        )
+        if request is not None:
+            return request.role
+        if user_id in bot.allowlist:
+            return "admin" if bot.integration == "market" else "viewer"
+        return None
+
     def claim_owner(
         self,
         session: Session,
@@ -186,6 +218,7 @@ class MaxBotService:
         *,
         decision: str,
         reviewer_id: int,
+        role: str | None = None,
     ) -> MaxAccessRequest:
         request = session.get(MaxAccessRequest, request_id)
         if request is None or request.bot_id != bot.id:
@@ -193,6 +226,8 @@ class MaxBotService:
         if request.status != "pending":
             return request
         request.status = decision
+        if decision == "approved" and role:
+            request.role = role
         request.reviewed_by = reviewer_id
         request.reviewed_at = datetime.now(UTC)
         if decision == "approved":

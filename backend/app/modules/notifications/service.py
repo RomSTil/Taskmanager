@@ -56,9 +56,12 @@ class InteractionRegistry:
             "данные",
         )
 
-    def menu_rows(self) -> list[list[MenuAction]]:
+    def menu_rows(self, prefix: str | None = None) -> list[list[MenuAction]]:
         rows: dict[int, list[MenuAction]] = {}
-        for action in self._actions:
+        actions = self._actions
+        if prefix:
+            actions = [action for action in actions if action.action.startswith(f"{prefix}.")]
+        for action in actions:
             rows.setdefault(action.row, []).append(action)
         return [rows[row] for row in sorted(rows)]
 

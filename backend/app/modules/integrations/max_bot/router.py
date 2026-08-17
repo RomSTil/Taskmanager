@@ -10,6 +10,7 @@ from ....database import get_session
 from ....dependencies import Principal, get_principal
 from ....security import constant_time_equal, decrypt_secret, hash_token
 from ...notifications.service import InteractionRegistry
+from ..yandex_market.service import YandexMarketService
 from .client import MaxApiClient
 from .formatter import (
     access_denied_payload,
@@ -22,7 +23,6 @@ from .formatter import (
 from .models import MaxBotConfig, MaxUpdate
 from .schemas import MaxBotCreate, MaxBotCreated, MaxBotRead, MaxBotUpdate
 from .service import MaxBotService
-
 
 router = APIRouter(tags=["max"])
 
@@ -77,14 +77,18 @@ def _sender_name(update: dict[str, Any], user_id: int) -> str:
     ).strip()[:160]
 
 
-def _moderation_action(action: str) -> tuple[str, str] | None:
+def _moderation_action(action: str) -> tuple[str, str | None, str] | None:
     prefix, separator, request_id = action.partition(":")
     if not separator or not request_id:
         return None
     if prefix == "max.access.approve":
-        return "approved", request_id
+        return "approved", "viewer", request_id
+    if prefix == "max.access.approve_picker":
+        return "approved", "picker", request_id
+    if prefix == "max.access.approve_admin":
+        return "approved", "admin", request_id
     if prefix == "max.access.deny":
-        return "denied", request_id
+        return "denied", None, request_id
     return None
 
 
@@ -98,6 +102,8 @@ COMMAND_ACTIONS = {
     "/alerts": "direct.alerts",
     "/refresh": "direct.refresh",
     "/settings": "direct.settings",
+    "/orders": "market.orders",
+    "/status": "market.status",
 }
 
 
@@ -248,7 +254,7 @@ def max_webhook(
     moderation = _moderation_action(action)
     is_owner = user_id is not None and user_id == bot.owner_user_id
     if moderation and is_owner and user_id is not None:
-        decision, request_id = moderation
+        decision, role, request_id = moderation
         try:
             access = service.review_access(
                 session,
@@ -256,6 +262,7 @@ def max_webhook(
                 request_id,
                 decision=decision,
                 reviewer_id=user_id,
+                role=role,
             )
         except LookupError:
             service.queue(
@@ -268,14 +275,18 @@ def max_webhook(
         else:
             approved = access.status == "approved"
             applicant_payload = (
-                menu_payload(interactions)
+                menu_payload(interactions, bot.integration)
                 if approved
                 else access_denied_payload()
             )
             if approved:
                 applicant_payload["text"] = (
                     "✅ **Доступ одобрен**\n"
-                    "Теперь вам доступна статистика Яндекс Директа.\n\n"
+                    + (
+                        f"Ваша роль: {'Сборщик' if access.role == 'picker' else 'Админ'}.\n\n"
+                        if bot.integration == "market"
+                        else "Теперь вам доступна статистика Яндекс Директа.\n\n"
+                    )
                     + applicant_payload["text"]
                 )
             service.queue(
@@ -293,6 +304,7 @@ def max_webhook(
                 notification_payload(
                     interactions.handle("direct.settings", session),
                     interactions,
+                    menu_prefix=bot.integration,
                 )
                 | {
                     "text": (
@@ -345,6 +357,7 @@ def max_webhook(
                         access.id,
                         display_name=access.display_name,
                         user_id=access.user_id,
+                        integration=bot.integration,
                     ),
                 )
         if not allowed:
@@ -352,8 +365,76 @@ def max_webhook(
             return {"accepted": True}
     text = _message_text(update).casefold()
     if update_type in {"bot_started", "bot_added"} or text in {"/start", "/menu"}:
-        service.queue(session, bot, target_type, target_id, menu_payload(interactions))
+        service.queue(
+            session,
+            bot,
+            target_type,
+            target_id,
+            menu_payload(interactions, bot.integration),
+        )
     elif update_type == "message_callback":
+        role = service.user_role(session, bot, user_id)
+        if action.startswith("market.pack:"):
+            if bot.integration != "market" or role != "picker" or user_id is None:
+                service.queue(
+                    session,
+                    bot,
+                    target_type,
+                    target_id,
+                    {
+                        "text": "⛔ Упаковку может подтверждать только сборщик.",
+                        "format": "markdown",
+                        "notify": True,
+                    },
+                )
+                session.commit()
+                return {"accepted": True}
+            order_id = action.partition(":")[2]
+            market = request.app.state.module_context.services.get(YandexMarketService)
+            try:
+                order = market.request_pack(
+                    session,
+                    order_id,
+                    user_id=user_id,
+                    display_name=_sender_name(update, user_id),
+                )
+                payload = market.pack_request_payload(order)
+            except LookupError:
+                payload = {
+                    "text": "Заказ не найден.",
+                    "format": "markdown",
+                    "notify": True,
+                }
+            except RuntimeError as exc:
+                payload = {
+                    "text": f"⚠️ {exc}",
+                    "format": "markdown",
+                    "notify": True,
+                }
+            service.queue(session, bot, target_type, target_id, payload)
+            session.commit()
+            return {"accepted": True}
+        if action == "market.orders" and bot.integration == "market":
+            market = request.app.state.module_context.services.get(YandexMarketService)
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                market.orders_payload(session, can_pack=role == "picker"),
+            )
+            session.commit()
+            return {"accepted": True}
+        if not action.startswith(f"{bot.integration}."):
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                {"text": "Действие недоступно для этого бота.", "notify": False},
+            )
+            session.commit()
+            return {"accepted": True}
         wait_payload = waiting_payload(interactions.label_for(action))
         callback_answered = False
         callback_id = _callback_id(update)
@@ -376,16 +457,41 @@ def max_webhook(
             bot,
             target_type,
             target_id,
-            notification_payload(notification, interactions),
+            notification_payload(
+                notification,
+                interactions,
+                menu_prefix=bot.integration,
+            ),
         )
     elif text in COMMAND_ACTIONS:
         action = COMMAND_ACTIONS[text]
+        if not action.startswith(f"{bot.integration}."):
+            session.commit()
+            return {"accepted": True}
+        if action == "market.orders":
+            market = request.app.state.module_context.services.get(YandexMarketService)
+            service.queue(
+                session,
+                bot,
+                target_type,
+                target_id,
+                market.orders_payload(
+                    session,
+                    can_pack=service.user_role(session, bot, user_id) == "picker",
+                ),
+            )
+            session.commit()
+            return {"accepted": True}
         service.queue(
             session,
             bot,
             target_type,
             target_id,
-            notification_payload(interactions.handle(action, session), interactions),
+            notification_payload(
+                interactions.handle(action, session),
+                interactions,
+                menu_prefix=bot.integration,
+            ),
         )
     session.commit()
     return {"accepted": True}

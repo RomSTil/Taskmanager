@@ -2,6 +2,7 @@ from .core.modules import ApplicationModule, ModuleContext, RouterModule
 from .modules.event_bus import EventBusModule
 from .modules.integrations.max_bot import MaxBotModule
 from .modules.integrations.yandex_direct import YandexDirectModule
+from .modules.integrations.yandex_market import YandexMarketModule
 from .modules.notifications import NotificationsModule
 from .routers import auth, notes, telegram, work
 from .services.auth import LoginRateLimiter
@@ -29,6 +30,7 @@ def default_modules() -> tuple[ApplicationModule, ...]:
         RouterModule("work", work.router, dependencies=("auth",)),
         RouterModule("knowledge", notes.router, dependencies=("auth",)),
         YandexDirectModule(),
+        YandexMarketModule(),
         MaxBotModule(),
         RouterModule("telegram", telegram.router, dependencies=("auth", "work")),
     )

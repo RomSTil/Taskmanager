@@ -44,7 +44,11 @@ class MaxNotificationTransport:
                     event_id=event.id,
                     target_type=str(bot.target_type),
                     target_id=int(bot.target_id or 0),
-                    payload=notification_payload(notification, self.interactions),
+                    payload=notification_payload(
+                        notification,
+                        self.interactions,
+                        menu_prefix=bot.integration,
+                    ),
                 )
             )
             queued += 1

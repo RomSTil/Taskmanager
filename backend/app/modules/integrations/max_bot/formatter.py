@@ -1,7 +1,7 @@
 from ...notifications.service import InteractionRegistry, Notification
 
 
-def _keyboard(interactions: InteractionRegistry) -> dict:
+def _keyboard(interactions: InteractionRegistry, prefix: str | None = None) -> dict:
     buttons = [
         [
             {
@@ -11,7 +11,7 @@ def _keyboard(interactions: InteractionRegistry) -> dict:
             }
             for action in row
         ]
-        for row in interactions.menu_rows()
+        for row in interactions.menu_rows(prefix)
     ]
     return {
         "type": "inline_keyboard",
@@ -22,6 +22,8 @@ def _keyboard(interactions: InteractionRegistry) -> dict:
 def notification_payload(
     notification: Notification,
     interactions: InteractionRegistry | None = None,
+    *,
+    menu_prefix: str | None = None,
 ) -> dict:
     payload = {
         "text": notification.text[:4000],
@@ -29,7 +31,7 @@ def notification_payload(
         "notify": True,
     }
     if interactions is not None:
-        payload["attachments"] = [_keyboard(interactions)]
+        payload["attachments"] = [_keyboard(interactions, menu_prefix)]
     return payload
 
 
@@ -46,13 +48,47 @@ def access_request_payload(
     *,
     display_name: str,
     user_id: int,
+    integration: str = "direct",
 ) -> dict:
+    if integration == "market":
+        question = "Какую роль выдать пользователю?"
+        buttons = [
+            {
+                "type": "callback",
+                "text": "📦 Сборщик",
+                "payload": f"max.access.approve_picker:{request_id}",
+            },
+            {
+                "type": "callback",
+                "text": "👑 Админ",
+                "payload": f"max.access.approve_admin:{request_id}",
+            },
+            {
+                "type": "callback",
+                "text": "❌ Отклонить",
+                "payload": f"max.access.deny:{request_id}",
+            },
+        ]
+    else:
+        question = "Разрешить ему просмотр статистики Яндекс Директа?"
+        buttons = [
+            {
+                "type": "callback",
+                "text": "✅ Принять",
+                "payload": f"max.access.approve:{request_id}",
+            },
+            {
+                "type": "callback",
+                "text": "❌ Отклонить",
+                "payload": f"max.access.deny:{request_id}",
+            },
+        ]
     return {
         "text": (
             "🔐 **Запрос доступа к боту**\n"
             f"Пользователь: {display_name}\n"
             f"MAX ID: `{user_id}`\n\n"
-            "Разрешить ему просмотр статистики Яндекс Директа?"
+            f"{question}"
         ),
         "format": "markdown",
         "notify": True,
@@ -61,18 +97,7 @@ def access_request_payload(
                 "type": "inline_keyboard",
                 "payload": {
                     "buttons": [
-                        [
-                            {
-                                "type": "callback",
-                                "text": "✅ Принять",
-                                "payload": f"max.access.approve:{request_id}",
-                            },
-                            {
-                                "type": "callback",
-                                "text": "❌ Отклонить",
-                                "payload": f"max.access.deny:{request_id}",
-                            },
-                        ]
+                        buttons
                     ]
                 },
             }
@@ -100,14 +125,19 @@ def access_denied_payload() -> dict:
     }
 
 
-def menu_payload(interactions: InteractionRegistry) -> dict:
-    return {
-        "text": (
-            "📊 **Яндекс Директ**\n"
+def menu_payload(interactions: InteractionRegistry, integration: str = "direct") -> dict:
+    if integration == "market":
+        title = "📦 **Яндекс Маркет**"
+        description = "Здесь можно посмотреть очередь заказов и состояние упаковки."
+    else:
+        title = "📊 **Яндекс Директ**"
+        description = (
             "Выберите показатель. Бот сначала подтвердит запрос, "
             "а затем покажет последние данные сервера."
-        ),
+        )
+    return {
+        "text": f"{title}\n{description}",
         "format": "markdown",
         "notify": True,
-        "attachments": [_keyboard(interactions)],
+        "attachments": [_keyboard(interactions, integration)],
     }
