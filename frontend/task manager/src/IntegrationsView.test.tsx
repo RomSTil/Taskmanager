@@ -10,6 +10,7 @@ function apiStub() {
     listMarketAccounts: vi.fn().mockResolvedValue([]),
     listMarketOrders: vi.fn().mockResolvedValue([]),
     listDirectAccounts: vi.fn().mockResolvedValue([]),
+    listOzonAccounts: vi.fn().mockResolvedValue([]),
     listMaxBots: vi.fn().mockResolvedValue([]),
     listMaxAccessRequests: vi.fn().mockResolvedValue([]),
     createMarketAccount: vi.fn().mockResolvedValue({ id: "market-1" }),
@@ -20,6 +21,7 @@ function apiStub() {
       webhook_secret: "once-secret",
     }),
     registerMaxWebhook: vi.fn().mockResolvedValue({ ok: true }),
+    createOzonAccount: vi.fn().mockResolvedValue({ id: "ozon-1", name: "Основной Ozon" }),
   } as unknown as TaskmanApi;
 }
 
@@ -60,5 +62,23 @@ describe("IntegrationsView", () => {
     }));
     expect(api.registerMaxWebhook).toHaveBeenCalledWith("bot-1");
     expect(await screen.findByText("once-secret")).toBeInTheDocument();
+  });
+
+  it("adds an Ozon Seller account from the UI", async () => {
+    const api = apiStub();
+    render(<IntegrationsView api={api} />);
+
+    await screen.findByText("Ozon Seller ещё не подключён.");
+    fireEvent.change(screen.getByLabelText("Название кабинета"), { target: { value: "Основной Ozon" } });
+    fireEvent.change(screen.getByLabelText("Client-Id"), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText("Api-Key"), { target: { value: "ozon-api-key-value" } });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить Ozon" }));
+
+    await waitFor(() => expect(api.createOzonAccount).toHaveBeenCalledWith({
+      name: "Основной Ozon",
+      client_id: "123456",
+      api_key: "ozon-api-key-value",
+      poll_interval_minutes: 5,
+    }));
   });
 });

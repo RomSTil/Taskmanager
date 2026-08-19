@@ -130,6 +130,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .integration-card-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .integration-card-heading small { color: var(--muted); font-size: 11px; }
 .integration-icon { width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; color: white; font-weight: 800; }
+.ozon-icon { background: #1264e5; }
 .yandex-icon { background: #ee3424; }
 .market-icon { background: linear-gradient(135deg, #ffdd2d, #f79f1b); color: #2a261e; }
 .max-icon { background: #171717; }

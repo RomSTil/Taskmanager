@@ -127,8 +127,8 @@ def access_denied_payload() -> dict:
 
 def menu_payload(interactions: InteractionRegistry, integration: str = "direct") -> dict:
     if integration == "market":
-        title = "📦 **Яндекс Маркет**"
-        description = "Здесь можно посмотреть очередь заказов и состояние упаковки."
+        title = "📦 **Заказы маркетплейсов**"
+        description = "Здесь можно посмотреть заказы Яндекс Маркета и Ozon Seller."
     else:
         title = "📊 **Яндекс Директ**"
         description = (

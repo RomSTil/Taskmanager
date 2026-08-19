@@ -1,6 +1,7 @@
 from .core.modules import ApplicationModule, ModuleContext, RouterModule
 from .modules.event_bus import EventBusModule
 from .modules.integrations.max_bot import MaxBotModule
+from .modules.integrations.ozon_seller import OzonSellerModule
 from .modules.integrations.yandex_direct import YandexDirectModule
 from .modules.integrations.yandex_market import YandexMarketModule
 from .modules.notifications import NotificationsModule
@@ -31,6 +32,7 @@ def default_modules() -> tuple[ApplicationModule, ...]:
         RouterModule("knowledge", notes.router, dependencies=("auth",)),
         YandexDirectModule(),
         YandexMarketModule(),
+        OzonSellerModule(),
         MaxBotModule(),
         RouterModule("telegram", telegram.router, dependencies=("auth", "work")),
     )

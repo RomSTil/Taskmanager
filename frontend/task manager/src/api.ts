@@ -17,6 +17,8 @@ import type {
   MaxBot,
   MaxBotCreated,
   MaxAccessRequest,
+  OzonAccount,
+  OzonSyncResult,
 } from "./types";
 
 const API_URL_KEY = "taskman.apiUrl";
@@ -391,6 +393,38 @@ export class TaskmanApi {
     return this.request<MaxAccessRequest[]>(
       `/integrations/max/bots/${encodeURIComponent(botId)}/access-requests`,
       {},
+      true,
+    );
+  }
+
+  listOzonAccounts(): Promise<OzonAccount[]> {
+    return this.request<OzonAccount[]>("/integrations/ozon/accounts", {}, true);
+  }
+
+  createOzonAccount(input: {
+    name: string;
+    client_id: string;
+    api_key: string;
+    poll_interval_minutes: number;
+  }): Promise<OzonAccount> {
+    return this.request<OzonAccount>("/integrations/ozon/accounts", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }, true);
+  }
+
+  syncOzonAccount(accountId: string): Promise<OzonSyncResult> {
+    return this.request<OzonSyncResult>(
+      `/integrations/ozon/accounts/${encodeURIComponent(accountId)}/sync`,
+      { method: "POST" },
+      true,
+    );
+  }
+
+  deleteOzonAccount(accountId: string): Promise<void> {
+    return this.request<void>(
+      `/integrations/ozon/accounts/${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
       true,
     );
   }

@@ -30,6 +30,8 @@ class MaxNotificationTransport:
             )
         )
         for bot in bots:
+            if event.aggregate_type == "ozon_posting" and bot.integration != "market":
+                continue
             existing = session.scalar(
                 select(MaxOutboxMessage.id).where(
                     MaxOutboxMessage.bot_id == bot.id,

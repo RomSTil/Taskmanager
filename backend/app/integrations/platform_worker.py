@@ -5,6 +5,8 @@ from ..core.modules import ModuleContext, ModuleRegistry
 from ..database import SessionLocal
 from ..module_catalog import default_modules
 from ..modules.integrations.max_bot.worker import deliver_max_messages
+from ..modules.integrations.ozon_seller.service import OzonSellerService
+from ..modules.integrations.ozon_seller.worker import sync_due_accounts
 from ..modules.integrations.yandex_direct.service import YandexDirectService
 from ..modules.integrations.yandex_direct.worker import (
     process_direct_jobs,
@@ -28,12 +30,14 @@ def run_once(context: ModuleContext | None = None) -> dict[str, int]:
     context = context or build_context()
     direct = context.services.get(YandexDirectService)
     market = context.services.get(YandexMarketService)
+    ozon = context.services.get(OzonSellerService)
     notifications = context.services.get(NotificationService)
     with SessionLocal() as session:
         scheduled = schedule_due_checks(session, direct)
         completed = process_direct_jobs(session, direct)
         market_synced = sync_due_market_accounts(session, market)
         market_packed = process_market_pack_requests(session, market)
+        ozon_synced = sync_due_accounts(session, ozon)
         dispatched = notifications.dispatch_pending(session)
         delivered = deliver_max_messages(session, verify_tls=context.settings.max_api_tls_verify)
     return {
@@ -41,6 +45,7 @@ def run_once(context: ModuleContext | None = None) -> dict[str, int]:
         "completed": completed,
         "market_synced": market_synced,
         "market_packed": market_packed,
+        "ozon_synced": ozon_synced,
         "dispatched": dispatched,
         "delivered": delivered,
     }

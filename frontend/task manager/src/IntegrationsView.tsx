@@ -1,12 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, type TaskmanApi } from "./api";
-import type { DirectAccount, MarketAccount, MarketOrder, MaxAccessRequest, MaxBot, MaxBotCreated } from "./types";
+import type { DirectAccount, MarketAccount, MarketOrder, MaxAccessRequest, MaxBot, MaxBotCreated, OzonAccount } from "./types";
 
 type IntegrationsViewProps = { api: TaskmanApi };
 
 const emptyMarketForm = { name: "", campaign_id: "", api_key: "", poll_interval_seconds: "60" };
 const emptyDirectForm = { name: "", token: "", client_login: "", balance_threshold: "5000", days_left_threshold: "3", anomaly_ratio: "2", monitor_interval_minutes: "30" };
 const emptyMaxForm = { name: "", token: "", integration: "market" as "market" | "direct", allowlist: "" };
+const emptyOzonForm = {
+  name: "",
+  client_id: "",
+  api_key: "",
+  poll_interval_minutes: "5",
+};
 
 function displayDate(value: string | null): string {
   if (!value) return "ещё не запускалась";
@@ -62,21 +68,61 @@ function DirectAccountCard({ account, refreshing, deleting, onRefresh, onDelete 
 function MaxBotCard({ bot, deleting, onRegister, onDelete }: { bot: MaxBot; deleting: boolean; onRegister: (bot: MaxBot) => void; onDelete: (bot: MaxBot) => void }) {
   return <article className="integration-card">
     <div className="integration-card-heading"><div><span className="integration-icon max-icon">M</span><div><strong>{bot.name}</strong><small>Токен: {bot.token_hint}</small></div></div><span className={`integration-status ${bot.enabled ? "online" : "offline"}`}>{bot.enabled ? "Активен" : "Выключен"}</span></div>
-    <div className="integration-details integration-details-stack"><span>Назначение <strong>{bot.integration === "market" ? "Сборка заказов" : "Аналитика Директа"}</strong></span><span>Webhook <code>{bot.webhook_url}</code></span><span>Получатель <strong>{bot.target_id ? `${bot.target_type}: ${bot.target_id}` : "определится после /start"}</strong></span><span>Доступ <strong>{bot.allowlist.length ? `${bot.allowlist.length} пользователей` : "заявки через /start"}</strong></span></div>
+    <div className="integration-details integration-details-stack"><span>Назначение <strong>{bot.integration === "market" ? "Заказы маркетплейсов" : "Аналитика Директа"}</strong></span><span>Webhook <code>{bot.webhook_url}</code></span><span>Получатель <strong>{bot.target_id ? `${bot.target_type}: ${bot.target_id}` : "определится после /start"}</strong></span><span>Доступ <strong>{bot.allowlist.length ? `${bot.allowlist.length} пользователей` : "заявки через /start"}</strong></span></div>
     {bot.last_error && <p className="integration-error">Последняя ошибка: {bot.last_error}</p>}
     <div className="integration-card-actions"><button className="secondary-button integration-action" type="button" onClick={() => onRegister(bot)} disabled={deleting}>Перерегистрировать webhook</button><button className="danger-button integration-action" type="button" onClick={() => onDelete(bot)} disabled={deleting}>{deleting ? "Удаляем…" : "Удалить бота"}</button></div>
   </article>;
+}
+
+function OzonAccountCard({
+  account,
+  refreshing,
+  deleting,
+  onRefresh,
+  onDelete,
+}: {
+  account: OzonAccount;
+  refreshing: boolean;
+  deleting: boolean;
+  onRefresh: (account: OzonAccount) => void;
+  onDelete: (account: OzonAccount) => void;
+}) {
+  return (
+    <article className="integration-card">
+      <div className="integration-card-heading">
+        <div><span className="integration-icon ozon-icon">O</span><div><strong>{account.name}</strong><small>API-ключ: {account.api_key_hint}</small></div></div>
+        <span className={`integration-status ${account.enabled ? "online" : "offline"}`}>{account.enabled ? "Активен" : "Выключен"}</span>
+      </div>
+      <div className="integration-details integration-details-stack">
+        <span>Client-Id <strong>{account.client_id}</strong></span>
+        <span>Проверка <strong>каждые {account.poll_interval_minutes} мин.</strong></span>
+        <span>Начальная загрузка <strong>{account.baseline_completed ? "готова" : "ожидается"}</strong></span>
+      </div>
+      <p className="integration-meta">Последняя проверка: {displayDate(account.last_checked_at)}</p>
+      {account.last_error && <p className="integration-error">Последняя ошибка: {account.last_error}</p>}
+      <div className="integration-card-actions">
+        <button className="secondary-button integration-action" type="button" onClick={() => onRefresh(account)} disabled={refreshing || deleting || !account.enabled}>
+          {refreshing ? "Получаем заказы…" : "Проверить сейчас"}
+        </button>
+        <button className="danger-button integration-action" type="button" onClick={() => onDelete(account)} disabled={refreshing || deleting}>
+          {deleting ? "Удаляем…" : "Удалить Ozon"}
+        </button>
+      </div>
+    </article>
+  );
 }
 
 export default function IntegrationsView({ api }: IntegrationsViewProps) {
   const [marketAccounts, setMarketAccounts] = useState<MarketAccount[]>([]);
   const [orders, setOrders] = useState<MarketOrder[]>([]);
   const [accounts, setAccounts] = useState<DirectAccount[]>([]);
+  const [ozonAccounts, setOzonAccounts] = useState<OzonAccount[]>([]);
   const [bots, setBots] = useState<MaxBot[]>([]);
   const [accessRequests, setAccessRequests] = useState<MaxAccessRequest[]>([]);
   const [marketForm, setMarketForm] = useState(emptyMarketForm);
   const [directForm, setDirectForm] = useState(emptyDirectForm);
   const [maxForm, setMaxForm] = useState(emptyMaxForm);
+  const [ozonForm, setOzonForm] = useState(emptyOzonForm);
   const [maxSecret, setMaxSecret] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState("");
@@ -88,9 +134,9 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
   async function load() {
     setLoading(true); setError("");
     try {
-      const [nextMarketAccounts, nextOrders, nextAccounts, nextBots] = await Promise.all([api.listMarketAccounts(), api.listMarketOrders(), api.listDirectAccounts(), api.listMaxBots()]);
+      const [nextMarketAccounts, nextOrders, nextAccounts, nextOzonAccounts, nextBots] = await Promise.all([api.listMarketAccounts(), api.listMarketOrders(), api.listDirectAccounts(), api.listOzonAccounts(), api.listMaxBots()]);
       const nextRequests = (await Promise.all(nextBots.filter((bot) => bot.integration === "market").map((bot) => api.listMaxAccessRequests(bot.id)))).flat();
-      setMarketAccounts(nextMarketAccounts); setOrders(nextOrders); setAccounts(nextAccounts); setBots(nextBots); setAccessRequests(nextRequests);
+      setMarketAccounts(nextMarketAccounts); setOrders(nextOrders); setAccounts(nextAccounts); setOzonAccounts(nextOzonAccounts); setBots(nextBots); setAccessRequests(nextRequests);
     } catch (reason) { setError(errorText(reason)); } finally { setLoading(false); }
   }
 
@@ -146,6 +192,63 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
     catch (reason) { setError(errorText(reason)); } finally { setDeletingConnectionId(null); }
   }
 
+  async function submitOzon(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusyAction("ozon-create");
+    setError("");
+    setMessage("");
+    try {
+      const account = await api.createOzonAccount({
+        name: ozonForm.name.trim(),
+        client_id: ozonForm.client_id.trim(),
+        api_key: ozonForm.api_key,
+        poll_interval_minutes: Number(ozonForm.poll_interval_minutes),
+      });
+      setOzonForm(emptyOzonForm);
+      setMessage(`Ozon Seller «${account.name}» подключён. Первая проверка запомнит текущие заказы без массовой рассылки.`);
+      await load();
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function refreshOzonAccount(account: OzonAccount) {
+    setRefreshingAccountId(account.id);
+    setError("");
+    setMessage(`Получаем заказы Ozon из кабинета «${account.name}»…`);
+    try {
+      const result = await api.syncOzonAccount(account.id);
+      await load();
+      setMessage(
+        result.baseline
+          ? `Начальная загрузка «${account.name}» готова: запомнено ${result.created} отправлений. Новые заказы будут приходить в MAX.`
+          : `Ozon обновлён: получено ${result.fetched}, новых ${result.created}, уведомлений ${result.notified}.`,
+      );
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setRefreshingAccountId(null);
+    }
+  }
+
+  async function deleteOzonAccount(account: OzonAccount) {
+    if (!window.confirm(`Удалить подключение Ozon Seller «${account.name}» и историю его отправлений?`)) return;
+    setDeletingConnectionId(account.id);
+    setError("");
+    setMessage("");
+    try {
+      await api.deleteOzonAccount(account.id);
+      setOzonAccounts((current) => current.filter((item) => item.id !== account.id));
+      setMessage(`Подключение Ozon Seller «${account.name}» удалено.`);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setDeletingConnectionId(null);
+    }
+  }
+
   async function registerWebhook(bot: MaxBot) {
     setBusyAction(`webhook-${bot.id}`); setError("");
     try { await api.registerMaxWebhook(bot.id); setMessage(`Webhook для «${bot.name}» зарегистрирован. Открой бота в MAX и отправь /start.`); await load(); }
@@ -176,12 +279,12 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
   const pendingRequests = accessRequests.filter((request) => request.status === "pending").length;
 
   return <section className="integrations-page">
-    <div className="integrations-intro"><div><p className="eyebrow">СКЛАД И УВЕДОМЛЕНИЯ</p><h2>Яндекс Маркет и MAX</h2><p>Подключи магазин и бота. Новые заказы появятся здесь и уйдут сборщикам в MAX с кнопкой «Запаковал».</p></div><button className="text-button" type="button" onClick={() => void load()} disabled={loading}>Обновить</button></div>
+    <div className="integrations-intro"><div><p className="eyebrow">СКЛАД И УВЕДОМЛЕНИЯ</p><h2>Яндекс Маркет, Ozon и MAX</h2><p>Подключи кабинеты маркетплейсов и бота. Новые заказы появятся здесь и будут отправлены в MAX.</p></div><button className="text-button" type="button" onClick={() => void load()} disabled={loading}>Обновить</button></div>
     {error && <div className="error-message page-error">{error}</div>}
     {message && <div className="integration-success">{message}</div>}
     {maxSecret && <div className="integration-secret"><strong>Секрет webhook — сохрани сейчас:</strong><code>{maxSecret}</code><span>Он показывается только один раз.</span></div>}
 
-    <div className="integration-metrics" aria-label="Сводка интеграции"><div><span>Магазины</span><strong>{marketAccounts.length}</strong></div><div><span>Ждут сборки</span><strong>{waitingOrders}</strong></div><div><span>Готовы</span><strong>{packedOrders}</strong></div><div><span>Заявки</span><strong>{pendingRequests}</strong></div></div>
+    <div className="integration-metrics" aria-label="Сводка интеграции"><div><span>Кабинеты</span><strong>{marketAccounts.length + ozonAccounts.length}</strong></div><div><span>Ждут сборки</span><strong>{waitingOrders}</strong></div><div><span>Готовы</span><strong>{packedOrders}</strong></div><div><span>Заявки</span><strong>{pendingRequests}</strong></div></div>
 
     <div className="integration-columns integration-primary-columns">
       <div className="integration-column">
@@ -210,6 +313,26 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
         <div className="integration-list">{loading ? <div className="loading-line">Загружаем ботов…</div> : marketBots.length ? marketBots.map((bot) => <MaxBotCard bot={bot} deleting={deletingConnectionId === bot.id || busyAction === `webhook-${bot.id}`} onRegister={registerWebhook} onDelete={deleteMaxBot} key={bot.id} />) : <div className="integration-empty">Бот для заказов ещё не подключён.</div>}</div>
       </div>
     </div>
+
+    <section className="integration-workspace-panel">
+      <div className="section-heading"><div><p className="eyebrow">OZON SELLER</p><h3>Уведомления о новых заказах</h3></div><span className="muted">FBS и FBO · без дублей</span></div>
+      <div className="integration-columns">
+        <div className="integration-column">
+          <form className="integration-form" onSubmit={submitOzon}>
+            <label>Название кабинета<input value={ozonForm.name} onChange={(event) => setOzonForm({ ...ozonForm, name: event.currentTarget.value })} placeholder="Основной Ozon" required /></label>
+            <label>Client-Id<input value={ozonForm.client_id} onChange={(event) => setOzonForm({ ...ozonForm, client_id: event.currentTarget.value })} placeholder="ID продавца из Ozon Seller" required /></label>
+            <label>Api-Key<input type="password" value={ozonForm.api_key} onChange={(event) => setOzonForm({ ...ozonForm, api_key: event.currentTarget.value })} placeholder="API-ключ из настроек кабинета" minLength={10} autoComplete="off" required /></label>
+            <label>Интервал проверки, минут<input type="number" min="5" max="1440" value={ozonForm.poll_interval_minutes} onChange={(event) => setOzonForm({ ...ozonForm, poll_interval_minutes: event.currentTarget.value })} /></label>
+            <p className="form-hint">API-ключ хранится зашифрованным. Первая загрузка запомнит текущие отправления без массовой рассылки.</p>
+            <button className="primary-button" type="submit" disabled={Boolean(busyAction)}>{busyAction === "ozon-create" ? "Подключаем…" : "Подключить Ozon"}</button>
+          </form>
+        </div>
+        <div className="integration-column">
+          <p className="form-hint">Новые отправления Ozon будут приходить в тот же MAX-бот, который подключён для заказов Яндекс Маркета. В меню бота появятся «Ozon: заказы» и «Ozon: обновить».</p>
+          <div className="integration-list">{loading ? <div className="loading-line">Загружаем кабинеты Ozon…</div> : ozonAccounts.length ? ozonAccounts.map((account) => <OzonAccountCard account={account} refreshing={refreshingAccountId === account.id} deleting={deletingConnectionId === account.id} onRefresh={refreshOzonAccount} onDelete={deleteOzonAccount} key={account.id} />) : <div className="integration-empty">Ozon Seller ещё не подключён.</div>}</div>
+        </div>
+      </div>
+    </section>
 
     <section className="integration-workspace-panel">
       <div className="section-heading"><div><p className="eyebrow">ЗАКАЗЫ</p><h3>Очередь сборки</h3></div><span className="muted">Всего: {orders.length}</span></div>

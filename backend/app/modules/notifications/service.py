@@ -79,6 +79,32 @@ class NotificationService:
 
     def format_event(self, event: DomainEvent) -> Notification:
         payload = event.payload
+        if event.event_type == "OzonOrderCreated":
+            products = payload.get("products") or []
+            product_lines = []
+            total_quantity = 0
+            for product in products[:8]:
+                quantity = int(product.get("quantity") or 0)
+                total_quantity += quantity
+                product_lines.append(f"• {product.get('name', 'Товар')} × {quantity}")
+            total_quantity += sum(
+                int(product.get("quantity") or 0) for product in products[8:]
+            )
+            if len(products) > 8:
+                product_lines.append(f"• и ещё {len(products) - 8} позиций")
+            shipment = payload.get("shipment_date")
+            shipment_text = f"\nОтгрузить до: {shipment}" if shipment else ""
+            return Notification(
+                "🛒 **Новый заказ Ozon**\n"
+                f"Кабинет: {payload.get('account_name', '')}\n"
+                f"Отправление: `{payload.get('posting_number', event.aggregate_id)}`\n"
+                f"Схема: {payload.get('scheme', '')} · Статус: {payload.get('status', '')}\n"
+                f"Товаров: {total_quantity} шт.\n"
+                + "\n".join(product_lines)
+                + f"\nСумма: {float(payload.get('total', 0)):.2f} "
+                f"{payload.get('currency', 'RUB')}"
+                + shipment_text
+            )
         if event.event_type == "BudgetRunningLow":
             days = payload.get("days_left")
             days_text = "нет прогноза" if days is None else f"{float(days):.1f} дн."

@@ -100,3 +100,31 @@ class DirectSyncFailed:
             for key, value in asdict(self).items()
             if key not in {"event_type", "aggregate_type"}
         }
+
+
+@dataclass(frozen=True, slots=True)
+class OzonOrderCreated:
+    account_id: str
+    account_name: str
+    posting_number: str
+    order_number: str | None
+    scheme: str
+    status: str
+    products: list[dict[str, Any]]
+    total: float
+    currency: str
+    created_at: str | None
+    shipment_date: str | None
+    event_type: str = "OzonOrderCreated"
+    aggregate_type: str = "ozon_posting"
+
+    @property
+    def aggregate_id(self) -> str:
+        return self.posting_number
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if key not in {"event_type", "aggregate_type"}
+        }

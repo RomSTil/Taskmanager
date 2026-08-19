@@ -260,3 +260,26 @@ export interface MaxAccessRequest {
   requested_at: string;
   reviewed_at: string | null;
 }
+
+export interface OzonAccount {
+  id: string;
+  name: string;
+  client_id: string;
+  api_key_hint: string;
+  enabled: boolean;
+  poll_interval_minutes: number;
+  baseline_completed: boolean;
+  last_checked_at: string | null;
+  last_error: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OzonSyncResult {
+  account_id: string;
+  fetched: number;
+  created: number;
+  notified: number;
+  baseline: boolean;
+}
