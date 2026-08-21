@@ -126,11 +126,12 @@ def pack_queued_payload(order: MarketOrder) -> dict:
 
 
 def packed_payload(order: MarketOrder, *, admin: bool) -> dict:
+    provider_status = order.substatus or order.status
     if admin:
         text = (
             f"✅ **Заказ №{order.market_order_id} запакован**\n"
             f"Сборщик: {_plain(order.pack_requested_name or order.pack_requested_by)}\n"
-            "Статус Яндекс Маркета: READY_TO_SHIP"
+            f"Статус Яндекс Маркета: `{provider_status}`"
         )
     else:
         text = (
@@ -141,7 +142,10 @@ def packed_payload(order: MarketOrder, *, admin: bool) -> dict:
 
 
 def pack_failed_payload(order: MarketOrder, *, admin: bool) -> dict:
-    audience = "Администратору нужно проверить интеграцию." if admin else "Попробуйте ещё раз."
+    if admin and order.pack_error:
+        audience = f"Причина: {_plain(order.pack_error)}"
+    else:
+        audience = "Попробуйте ещё раз."
     return {
         "text": (
             f"❌ Не удалось обновить заказ №{order.market_order_id} "

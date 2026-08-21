@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +16,8 @@ from app.modules.integrations.yandex_market.worker import process_market_pack_re
 class FakeMarketClient:
     def __init__(self) -> None:
         self.ready_order_ids: list[int] = []
+        self.remote_status = "PROCESSING"
+        self.remote_substatus: str | None = "STARTED"
 
     def get_processing_orders(self) -> list[dict]:
         return [
@@ -42,12 +45,30 @@ class FakeMarketClient:
             },
         }
 
+    def get_order(self, order_id: int) -> dict:
+        return {
+            "id": order_id,
+            "status": self.remote_status,
+            "substatus": self.remote_substatus,
+        }
+
 
 def test_market_client_uses_api_key_and_ready_to_ship_contract() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/orders/9001"):
+            return httpx.Response(
+                200,
+                json={
+                    "order": {
+                        "id": 9001,
+                        "status": "PROCESSING",
+                        "substatus": "STARTED",
+                    }
+                },
+            )
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -68,17 +89,41 @@ def test_market_client_uses_api_key_and_ready_to_ship_contract() -> None:
     with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
         market = YandexMarketClient("market-api-key", 12345, http_client=http_client)
         assert market.get_processing_orders()[0]["id"] == 9001
+        assert market.get_order(9001)["substatus"] == "STARTED"
         market.mark_ready_to_ship(9001)
 
     assert requests[0].headers["Api-Key"] == "market-api-key"
     assert requests[0].url.path == "/v2/campaigns/12345/orders"
     assert requests[0].url.params.get_list("status") == ["PROCESSING"]
     assert requests[0].url.params.get_list("substatus") == ["STARTED"]
-    assert requests[1].method == "PUT"
-    assert requests[1].url.path == "/v2/campaigns/12345/orders/9001/status"
-    assert requests[1].read().decode() == (
+    assert requests[1].method == "GET"
+    assert requests[1].url.path == "/v2/campaigns/12345/orders/9001"
+    assert requests[2].method == "PUT"
+    assert requests[2].url.path == "/v2/campaigns/12345/orders/9001/status"
+    assert requests[2].read().decode() == (
         '{"order":{"status":"PROCESSING","substatus":"READY_TO_SHIP"}}'
     )
+
+
+def test_market_client_preserves_provider_error_details() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "status": "ERROR",
+                "errors": [
+                    {
+                        "code": "STATUS_NOT_ALLOWED",
+                        "message": "No transition found: DELIVERY -> PROCESSING",
+                    }
+                ],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        market = YandexMarketClient("market-api-key", 12345, http_client=http_client)
+        with pytest.raises(RuntimeError, match="STATUS_NOT_ALLOWED.*DELIVERY"):
+            market.mark_ready_to_ship(9001)
 
 
 def test_market_bot_registration_roles_notification_and_pack_flow(
@@ -228,3 +273,15 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
         and "Сборщик: Сборщик Анна" in message.payload["text"]
         for message in messages
     )
+
+    # A repeated click after Market has already moved the order forward is
+    # reconciled as success instead of trying an invalid reverse transition.
+    order.status = "PROCESSING"
+    order.substatus = "STARTED"
+    order.pack_state = "pending"
+    fake_market.remote_status = "DELIVERY"
+    fake_market.remote_substatus = None
+    assert service.process_pack(db_session, order) is True
+    assert order.status == "DELIVERY"
+    assert order.pack_state == "packed"
+    assert fake_market.ready_order_ids == [9001]

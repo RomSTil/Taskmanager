@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -22,6 +23,7 @@ from .schemas import MarketAccountCreate, MarketAccountUpdate
 
 ClientFactory = Callable[[str, int], YandexMarketClient]
 MARKET_TIMEZONE = ZoneInfo("Europe/Moscow")
+logger = logging.getLogger(__name__)
 
 
 def _parse_market_datetime(value: object) -> datetime | None:
@@ -251,27 +253,73 @@ class YandexMarketService:
 
     def process_pack(self, session: Session, order: MarketOrder) -> bool:
         account = self.account(session, order.account_id)
+        client = self.client_factory(
+            decrypt_secret(account.api_key_encrypted), account.campaign_id
+        )
         try:
-            client = self.client_factory(
-                decrypt_secret(account.api_key_encrypted), account.campaign_id
-            )
+            remote = client.get_order(order.market_order_id)
+            self._apply_remote_state(order, remote)
+            if self._remote_pack_completed(order.status, order.substatus):
+                self._finish_pack(session, account, order)
+                return True
+            if order.status != "PROCESSING" or order.substatus != "STARTED":
+                raise RuntimeError(
+                    "Заказ уже находится в состоянии "
+                    f"{order.status}/{order.substatus or 'без подстатуса'}"
+                )
             client.mark_ready_to_ship(order.market_order_id)
         except Exception as exc:  # noqa: BLE001 - persist any provider failure for retry
+            # The order can advance between GET and PUT. Reconcile once before
+            # reporting an error so an idempotent click never looks like a failure.
+            try:
+                remote = client.get_order(order.market_order_id)
+                self._apply_remote_state(order, remote)
+            except Exception as reconcile_exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not reconcile Yandex Market order %s after update failure: %s",
+                    order.market_order_id,
+                    reconcile_exc,
+                )
+            if self._remote_pack_completed(order.status, order.substatus):
+                self._finish_pack(session, account, order)
+                return True
             order.pack_state = "failed"
             order.pack_attempts += 1
-            order.pack_error = f"Yandex Market update failed ({type(exc).__name__})"
+            detail = str(exc).strip() or type(exc).__name__
+            order.pack_error = f"Yandex Market update failed: {detail}"[:1000]
             account.last_error = order.pack_error
             self._queue_pack_result(session, order, success=False)
             return False
         order.status = "PROCESSING"
         order.substatus = "READY_TO_SHIP"
+        self._finish_pack(session, account, order)
+        return True
+
+    @staticmethod
+    def _apply_remote_state(order: MarketOrder, remote: dict) -> None:
+        order.status = str(remote.get("status") or order.status)
+        order.substatus = str(remote.get("substatus") or "") or None
+
+    @staticmethod
+    def _remote_pack_completed(status: str, substatus: str | None) -> bool:
+        return substatus in {"READY_TO_SHIP", "SHIPPED"} or status in {
+            "DELIVERY",
+            "PICKUP",
+            "DELIVERED",
+        }
+
+    def _finish_pack(
+        self,
+        session: Session,
+        account: YandexMarketAccount,
+        order: MarketOrder,
+    ) -> None:
         order.pack_state = "packed"
         order.pack_attempts += 1
         order.packed_at = datetime.now(UTC)
         order.pack_error = None
         account.last_error = None
         self._queue_pack_result(session, order, success=True)
-        return True
 
     def _queue_pack_result(
         self, session: Session, order: MarketOrder, *, success: bool

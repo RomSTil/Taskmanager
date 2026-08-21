@@ -47,8 +47,20 @@ class YandexMarketClient:
                 body = {}
             if response.is_error or body.get("status") == "ERROR":
                 errors = body.get("errors") or []
-                code = errors[0].get("code") if errors else response.status_code
-                raise YandexMarketApiError(f"Yandex Market API error {code}")
+                details = "; ".join(
+                    " ".join(
+                        part
+                        for part in (
+                            str(error.get("code") or "").strip(),
+                            str(error.get("message") or "").strip(),
+                        )
+                        if part
+                    )
+                    for error in errors[:3]
+                )
+                raise YandexMarketApiError(
+                    f"Yandex Market API error {details or response.status_code}"
+                )
             return dict(body)
         finally:
             if close_client:
@@ -77,6 +89,14 @@ class YandexMarketClient:
             page_token = (result.get("paging") or {}).get("nextPageToken")
             if not page_token:
                 return orders
+
+    def get_order(self, order_id: int) -> dict[str, Any]:
+        body = self._request(
+            "GET",
+            f"/v2/campaigns/{self.campaign_id}/orders/{order_id}",
+        )
+        result = body.get("result") or body
+        return dict(result.get("order") or result)
 
     def mark_ready_to_ship(self, order_id: int) -> dict[str, Any]:
         return self._request(
