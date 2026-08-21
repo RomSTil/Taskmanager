@@ -394,9 +394,13 @@ def test_max_callback_answers_with_waiting_state_and_returns_metrics(
         "callback": {
             "callback_id": "callback-123",
             "payload": "direct.today",
+            "user": {"user_id": 42, "name": "Owner"},
         },
-        "message": {"body": {"mid": "mid.waiting"}},
-        "user": {"user_id": 42, "name": "Owner"},
+        "message": {
+            "sender": {"user_id": 999, "name": "Metrics Bot", "is_bot": True},
+            "recipient": {"user_id": 42},
+            "body": {"mid": "mid.waiting"},
+        },
     }
     headers = {"X-Max-Bot-Api-Secret": bot["webhook_secret"]}
     response = client.post(

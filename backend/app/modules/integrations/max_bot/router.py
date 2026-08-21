@@ -47,7 +47,11 @@ def _target(update: dict[str, Any]) -> tuple[str, int, int | None] | None:
     message = update.get("message") or {}
     recipient = message.get("recipient") or {}
     callback = update.get("callback") or {}
-    sender = message.get("sender") or update.get("user") or callback.get("user") or {}
+    if update.get("update_type") == "message_callback":
+        # In callback updates message.sender is the bot that owns the keyboard.
+        sender = callback.get("user") or update.get("user") or {}
+    else:
+        sender = message.get("sender") or update.get("user") or callback.get("user") or {}
     chat_id = update.get("chat_id") or recipient.get("chat_id")
     user_id = sender.get("user_id") or update.get("user_id")
     if chat_id:
@@ -82,7 +86,10 @@ def _message_id(update: dict[str, Any]) -> str:
 def _sender_name(update: dict[str, Any], user_id: int) -> str:
     message = update.get("message") or {}
     callback = update.get("callback") or {}
-    sender = message.get("sender") or update.get("user") or callback.get("user") or {}
+    if update.get("update_type") == "message_callback":
+        sender = callback.get("user") or update.get("user") or {}
+    else:
+        sender = message.get("sender") or update.get("user") or callback.get("user") or {}
     return str(
         sender.get("name")
         or sender.get("username")
