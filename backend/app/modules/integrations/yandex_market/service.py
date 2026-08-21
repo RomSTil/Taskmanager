@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Callable
+from collections import defaultdict
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -184,6 +185,29 @@ class YandexMarketService:
                 self._queue_new_order(session, order)
                 order.notified_at = now
                 created += 1
+
+        ready_orders = list(
+            session.scalars(
+                select(MarketOrder).where(
+                    MarketOrder.account_id == account.id,
+                    MarketOrder.status == "PROCESSING",
+                    MarketOrder.substatus == "READY_TO_SHIP",
+                )
+            )
+        )
+        for order in ready_orders:
+            try:
+                self._apply_remote_state(
+                    order,
+                    client.get_order(order.market_order_id),
+                )
+                order.last_seen_at = now
+            except Exception as exc:  # noqa: BLE001 - one order must not stop polling
+                logger.warning(
+                    "Could not reconcile Yandex Market order %s: %s",
+                    order.market_order_id,
+                    exc,
+                )
         account.last_polled_at = now
         account.last_error = None
         session.commit()
@@ -241,6 +265,84 @@ class YandexMarketService:
     def orders_notification(self, session: Session) -> Notification:
         count = len(self.available_orders(session))
         return Notification(f"📦 Заказов к упаковке: {count}")
+
+    def shipment_plan_notification(self, session: Session) -> Notification:
+        # Imported lazily to keep the marketplace modules independently loadable.
+        from ..ozon_seller.models import OzonPosting
+
+        market_orders = list(
+            session.scalars(
+                select(MarketOrder).where(
+                    MarketOrder.status == "PROCESSING",
+                    MarketOrder.substatus.in_(("STARTED", "READY_TO_SHIP")),
+                )
+            )
+        )
+        ozon_postings = list(
+            session.scalars(
+                select(OzonPosting).where(
+                    OzonPosting.scheme == "FBS",
+                    OzonPosting.status.in_(("awaiting_packaging", "awaiting_deliver")),
+                )
+            )
+        )
+
+        market_items = self._aggregate_items(
+            (item.get("offerName") or item.get("offerId") or "Товар", item.get("count"))
+            for order in market_orders
+            for item in order.items
+        )
+        ozon_items = self._aggregate_items(
+            (item.get("name") or item.get("offer_id") or "Товар", item.get("quantity"))
+            for posting in ozon_postings
+            for item in posting.products
+        )
+        parcel_count = len(market_orders) + len(ozon_postings)
+        item_count = sum(market_items.values()) + sum(ozon_items.values())
+        lines = [
+            "📋 **Что отправить сегодня**",
+            f"Всего посылок: **{parcel_count}** · товаров: **{item_count} шт.**",
+        ]
+        self._append_shipment_section(
+            lines,
+            title="🟡 Яндекс Маркет",
+            parcel_count=len(market_orders),
+            items=market_items,
+        )
+        self._append_shipment_section(
+            lines,
+            title="🔵 Ozon",
+            parcel_count=len(ozon_postings),
+            items=ozon_items,
+        )
+        lines.append("\nУчитываются заказы, которые ещё нужно собрать или передать в доставку.")
+        return Notification("\n".join(lines))
+
+    @staticmethod
+    def _aggregate_items(items: Iterable[tuple[object, object]]) -> dict[str, int]:
+        totals: defaultdict[str, int] = defaultdict(int)
+        for raw_name, raw_quantity in items:
+            name = str(raw_name).strip() or "Товар"
+            try:
+                quantity = max(1, int(raw_quantity or 1))
+            except (TypeError, ValueError):
+                quantity = 1
+            totals[name] += quantity
+        return dict(sorted(totals.items(), key=lambda item: item[0].casefold()))
+
+    @staticmethod
+    def _append_shipment_section(
+        lines: list[str],
+        *,
+        title: str,
+        parcel_count: int,
+        items: dict[str, int],
+    ) -> None:
+        lines.append(f"\n{title}\nПосылок: **{parcel_count}**")
+        if not items:
+            lines.append("• Отправлений нет")
+            return
+        lines.extend(f"• {name} — **{quantity} шт.**" for name, quantity in items.items())
 
     def status_notification(self, session: Session) -> Notification:
         pending = session.scalar(

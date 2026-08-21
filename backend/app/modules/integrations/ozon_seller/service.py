@@ -14,7 +14,6 @@ from .client import OzonSellerClient
 from .models import OzonPosting, OzonSellerAccount
 from .schemas import OzonAccountCreate
 
-
 ClientFactory = Callable[[str, str], OzonSellerClient]
 
 
@@ -84,12 +83,10 @@ class OzonSellerService:
     ) -> dict[str, object]:
         now = now or datetime.now(UTC)
         baseline = not account.baseline_completed
+        # Ozon filters postings by their creation date, not by the date of the
+        # latest status change. Keep the lookback window so completed postings
+        # disappear from shipment plans after subsequent syncs.
         since = now - timedelta(days=30)
-        if account.last_checked_at is not None:
-            checked_at = account.last_checked_at
-            if checked_at.tzinfo is None:
-                checked_at = checked_at.replace(tzinfo=UTC)
-            since = checked_at - timedelta(minutes=10)
         client = self.client_factory(
             account.client_id,
             decrypt_secret(account.api_key_encrypted),
@@ -109,13 +106,34 @@ class OzonSellerService:
                 if not posting_number:
                     continue
                 existing = session.scalar(
-                    select(OzonPosting.id).where(
+                    select(OzonPosting).where(
                         OzonPosting.account_id == account.id,
                         OzonPosting.scheme == scheme,
                         OzonPosting.posting_number == posting_number,
                     )
                 )
                 if existing:
+                    products = self._products(item)
+                    existing.status = str(item.get("status") or existing.status)
+                    existing.products = products or existing.products
+                    existing.total = sum(
+                        (
+                            _decimal(product.get("price"))
+                            * int(product.get("quantity") or 0)
+                        )
+                        for product in existing.products
+                    )
+                    existing.currency = next(
+                        (
+                            str(product.get("currency_code"))
+                            for product in existing.products
+                            if product.get("currency_code")
+                        ),
+                        existing.currency,
+                    )
+                    existing.shipment_date = (
+                        _datetime(item.get("shipment_date")) or existing.shipment_date
+                    )
                     continue
                 products = self._products(item)
                 total = sum(

@@ -11,7 +11,10 @@ from app.modules.integrations.max_bot.models import MaxOutboxMessage
 from app.modules.integrations.ozon_seller.client import OzonSellerClient
 from app.modules.integrations.ozon_seller.models import OzonPosting, OzonSellerAccount
 from app.modules.integrations.ozon_seller.service import OzonSellerService
+from app.modules.integrations.yandex_market.models import MarketOrder, YandexMarketAccount
+from app.modules.integrations.yandex_market.service import YandexMarketService
 from app.modules.notifications.service import InteractionRegistry, NotificationService
+from app.security import encrypt_secret
 
 
 def posting(number: str, name: str = "Чеснок посадочный") -> dict:
@@ -80,6 +83,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     actions = {button["payload"] for row in buttons for button in row}
     assert "market.ozon_orders" in actions
     assert "market.ozon_refresh" in actions
+    assert "market.shipment_plan" in actions
 
     service = client.app.state.module_context.services.get(OzonSellerService)
     fake = FakeOzonClient()
@@ -127,6 +131,91 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert repeated["notified"] == 0
     assert db_session.scalar(select(func.count()).select_from(OzonPosting)) == 2
     assert db_session.scalar(select(func.count()).select_from(DomainEvent)) == 1
+
+    fake.fbs[0]["status"] = "delivered"
+    service.sync_account(db_session, account, now=datetime.now(UTC))
+    stored = db_session.scalar(
+        select(OzonPosting).where(OzonPosting.posting_number == "10001-0001-1")
+    )
+    assert stored and stored.status == "delivered"
+
+
+def test_shipment_plan_aggregates_actionable_marketplace_orders(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    market_account = YandexMarketAccount(
+        name="Market cabinet",
+        campaign_id=12345,
+        api_key_encrypted=encrypt_secret("market-api-key-with-enough-length"),
+        api_key_hint="...length",
+    )
+    ozon_account = OzonSellerAccount(
+        name="Ozon cabinet",
+        client_id="123456",
+        api_key_encrypted=encrypt_secret("ozon-api-key-with-enough-length"),
+        api_key_hint="...length",
+    )
+    db_session.add_all([market_account, ozon_account])
+    db_session.flush()
+    db_session.add_all(
+        [
+            MarketOrder(
+                account_id=market_account.id,
+                market_order_id=1001,
+                status="PROCESSING",
+                substatus="STARTED",
+                items=[{"offerName": "Чеснок Любаша", "count": 2}],
+            ),
+            MarketOrder(
+                account_id=market_account.id,
+                market_order_id=1002,
+                status="PROCESSING",
+                substatus="READY_TO_SHIP",
+                items=[{"offerName": "Чеснок Любаша", "count": 1}],
+            ),
+            MarketOrder(
+                account_id=market_account.id,
+                market_order_id=1003,
+                status="DELIVERY",
+                substatus="DELIVERY_SERVICE_RECEIVED",
+                items=[{"offerName": "Не учитывать", "count": 10}],
+            ),
+            OzonPosting(
+                account_id=ozon_account.id,
+                scheme="FBS",
+                posting_number="2001-1",
+                status="awaiting_packaging",
+                products=[{"name": "Чеснок Любаша", "quantity": 3}],
+            ),
+            OzonPosting(
+                account_id=ozon_account.id,
+                scheme="FBS",
+                posting_number="2002-1",
+                status="awaiting_deliver",
+                products=[{"name": "Чеснок Добрыня", "quantity": 2}],
+            ),
+            OzonPosting(
+                account_id=ozon_account.id,
+                scheme="FBO",
+                posting_number="2003-1",
+                status="awaiting_deliver",
+                products=[{"name": "Не учитывать", "quantity": 20}],
+            ),
+        ]
+    )
+    db_session.commit()
+
+    service = client.app.state.module_context.services.get(YandexMarketService)
+    text = service.shipment_plan_notification(db_session).text
+
+    assert "Всего посылок: **4** · товаров: **8 шт.**" in text
+    assert "🟡 Яндекс Маркет\nПосылок: **2**" in text
+    assert "🔵 Ozon\nПосылок: **2**" in text
+    assert text.count("Чеснок Любаша") == 2
+    assert "Чеснок Любаша — **3 шт.**" in text
+    assert "Чеснок Добрыня — **2 шт.**" in text
+    assert "Не учитывать" not in text
 
 
 def test_ozon_client_sends_credentials_and_paginates() -> None:

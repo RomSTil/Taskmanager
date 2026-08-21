@@ -17,6 +17,12 @@ class YandexMarketModule(RouterModule):
         context.services.add(YandexMarketService, service)
         interactions = context.services.get(InteractionRegistry)
         interactions.register(
+            "market.shipment_plan",
+            "📋 Что отправить",
+            service.shipment_plan_notification,
+            row=5,
+        )
+        interactions.register(
             "market.orders", "📦 Заказы к сборке", service.orders_notification, row=10
         )
         interactions.register(
