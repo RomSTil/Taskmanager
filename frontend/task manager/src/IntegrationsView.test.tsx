@@ -78,7 +78,7 @@ describe("IntegrationsView", () => {
       name: "Основной Ozon",
       client_id: "123456",
       api_key: "ozon-api-key-value",
-      poll_interval_minutes: 5,
+      poll_interval_minutes: 1,
     }));
   });
 });

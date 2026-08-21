@@ -29,7 +29,7 @@ class OzonSellerAccount(TimestampMixin, VersionMixin, Base):
     api_key_encrypted: Mapped[str] = mapped_column(Text)
     api_key_hint: Mapped[str] = mapped_column(String(16))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    poll_interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    poll_interval_minutes: Mapped[int] = mapped_column(Integer, default=1)
     baseline_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

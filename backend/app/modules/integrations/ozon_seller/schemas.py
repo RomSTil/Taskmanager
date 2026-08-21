@@ -12,7 +12,7 @@ class OzonAccountCreate(ApiModel):
     name: str = Field(min_length=1, max_length=120)
     client_id: str = Field(min_length=1, max_length=120)
     api_key: str = Field(min_length=10, max_length=4096)
-    poll_interval_minutes: int = Field(default=5, ge=5, le=1440)
+    poll_interval_minutes: int = Field(default=1, ge=1, le=1440)
     enabled: bool = True
 
 

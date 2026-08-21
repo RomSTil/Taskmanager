@@ -11,7 +11,7 @@ const emptyOzonForm = {
   name: "",
   client_id: "",
   api_key: "",
-  poll_interval_minutes: "5",
+  poll_interval_minutes: "1",
 };
 
 function displayDate(value: string | null): string {
@@ -322,13 +322,13 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
             <label>Название кабинета<input value={ozonForm.name} onChange={(event) => setOzonForm({ ...ozonForm, name: event.currentTarget.value })} placeholder="Основной Ozon" required /></label>
             <label>Client-Id<input value={ozonForm.client_id} onChange={(event) => setOzonForm({ ...ozonForm, client_id: event.currentTarget.value })} placeholder="ID продавца из Ozon Seller" required /></label>
             <label>Api-Key<input type="password" value={ozonForm.api_key} onChange={(event) => setOzonForm({ ...ozonForm, api_key: event.currentTarget.value })} placeholder="API-ключ из настроек кабинета" minLength={10} autoComplete="off" required /></label>
-            <label>Интервал проверки, минут<input type="number" min="5" max="1440" value={ozonForm.poll_interval_minutes} onChange={(event) => setOzonForm({ ...ozonForm, poll_interval_minutes: event.currentTarget.value })} /></label>
+            <label>Интервал проверки, минут<input type="number" min="1" max="1440" value={ozonForm.poll_interval_minutes} onChange={(event) => setOzonForm({ ...ozonForm, poll_interval_minutes: event.currentTarget.value })} /></label>
             <p className="form-hint">API-ключ хранится зашифрованным. Первая загрузка запомнит текущие отправления без массовой рассылки.</p>
             <button className="primary-button" type="submit" disabled={Boolean(busyAction)}>{busyAction === "ozon-create" ? "Подключаем…" : "Подключить Ozon"}</button>
           </form>
         </div>
         <div className="integration-column">
-          <p className="form-hint">Новые отправления Ozon будут приходить в тот же MAX-бот, который подключён для заказов Яндекс Маркета. В меню бота появятся «Ozon: заказы» и «Ozon: обновить».</p>
+          <p className="form-hint">Новые отправления Ozon автоматически проверяются каждую минуту и приходят в тот же MAX-бот, который подключён для заказов Яндекс Маркета.</p>
           <div className="integration-list">{loading ? <div className="loading-line">Загружаем кабинеты Ozon…</div> : ozonAccounts.length ? ozonAccounts.map((account) => <OzonAccountCard account={account} refreshing={refreshingAccountId === account.id} deleting={deletingConnectionId === account.id} onRefresh={refreshOzonAccount} onDelete={deleteOzonAccount} key={account.id} />) : <div className="integration-empty">Ozon Seller ещё не подключён.</div>}</div>
         </div>
       </div>

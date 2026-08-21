@@ -71,11 +71,12 @@ def test_ozon_new_order_is_sent_to_max_once(
             "name": "Main Ozon",
             "client_id": "123456",
             "api_key": "ozon-api-key-with-enough-length",
-            "poll_interval_minutes": 5,
+            "poll_interval_minutes": 1,
         },
     )
     assert account_response.status_code == 201, account_response.text
     assert account_response.json()["api_key_hint"].endswith("length")
+    assert account_response.json()["poll_interval_minutes"] == 1
     bot_response = client.post(
         "/api/v1/integrations/max/bots",
         headers=auth_headers,
@@ -91,9 +92,12 @@ def test_ozon_new_order_is_sent_to_max_once(
     interactions = client.app.state.module_context.services.get(InteractionRegistry)
     buttons = menu_payload(interactions, "market")["attachments"][0]["payload"]["buttons"]
     actions = {button["payload"] for row in buttons for button in row}
+    labels = {button["payload"]: button["text"] for row in buttons for button in row}
     assert "market.ozon_orders" in actions
-    assert "market.ozon_refresh" in actions
     assert "market.shipment_plan" in actions
+    assert "market.ozon_refresh" not in actions
+    assert "market.status" not in actions
+    assert labels["market.orders"] == "📦 Заказы Yandex"
 
     service = client.app.state.module_context.services.get(OzonSellerService)
     fake = FakeOzonClient()

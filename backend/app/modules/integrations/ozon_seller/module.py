@@ -23,9 +23,3 @@ class OzonSellerModule(RouterModule):
             service.recent_orders_notification,
             row=30,
         )
-        interactions.register(
-            "market.ozon_refresh",
-            "🔄 Ozon: обновить",
-            service.refresh_notification,
-            row=30,
-        )

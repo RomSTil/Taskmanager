@@ -110,7 +110,6 @@ COMMAND_ACTIONS = {
     "/refresh": "direct.refresh",
     "/settings": "direct.settings",
     "/orders": "market.orders",
-    "/status": "market.status",
 }
 
 

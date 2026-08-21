@@ -23,8 +23,5 @@ class YandexMarketModule(RouterModule):
             row=5,
         )
         interactions.register(
-            "market.orders", "📦 Заказы к сборке", service.orders_notification, row=10
-        )
-        interactions.register(
-            "market.status", "📊 Состояние", service.status_notification, row=20
+            "market.orders", "📦 Заказы Yandex", service.orders_notification, row=10
         )
