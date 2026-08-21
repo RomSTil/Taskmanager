@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +16,7 @@ from .models import OzonPosting, OzonSellerAccount
 from .schemas import OzonAccountCreate
 
 ClientFactory = Callable[[str, str], OzonSellerClient]
+MARKETPLACE_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
 def _datetime(value: object) -> datetime | None:
@@ -32,6 +34,22 @@ def _decimal(value: object) -> Decimal:
         return Decimal(str(value or "0"))
     except (InvalidOperation, ValueError):
         return Decimal("0")
+
+
+def _local_datetime(value: datetime | None, *, with_time: bool = False) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    pattern = "%d.%m.%Y, %H:%M" if with_time else "%d.%m.%Y"
+    return value.astimezone(MARKETPLACE_TIMEZONE).strftime(pattern)
+
+
+def _plain(value: object, fallback: str = "") -> str:
+    text = str(value or fallback).strip()
+    for character in "*_[`]":
+        text = text.replace(character, "")
+    return text
 
 
 class OzonSellerService:
@@ -225,9 +243,20 @@ class OzonSellerService:
         lines = ["📦 **Последние заказы Ozon**"]
         for posting in postings:
             quantity = sum(int(item.get("quantity") or 0) for item in posting.products)
+            lines.append(f"\n🔵 **Ozon — заказ №{_plain(posting.posting_number)}**")
+            if created_at := _local_datetime(posting.ozon_created_at):
+                lines.append(f"📅 Дата заказа: **{created_at}**")
+            lines.append(f"🔢 Количество штук: **{quantity}**")
+            for product in posting.products:
+                name = _plain(product.get("name") or product.get("offer_id"), "Товар")
+                product_quantity = max(1, int(product.get("quantity") or 1))
+                suffix = f" × {product_quantity}" if product_quantity > 1 else ""
+                lines.append(f"• {name}{suffix}")
+            if shipment_date := _local_datetime(posting.shipment_date, with_time=True):
+                lines.append(f"⏰ Отгрузить до: **{shipment_date} (МСК)**")
             lines.append(
-                f"• `{posting.posting_number}` · {posting.scheme} · "
-                f"{quantity} шт. · {posting.total:.2f} {posting.currency}"
+                f"🚚 Схема: **{_plain(posting.scheme)}** · "
+                f"💰 **{posting.total:.2f} {_plain(posting.currency, 'RUB')}**"
             )
         return Notification("\n".join(lines))
 

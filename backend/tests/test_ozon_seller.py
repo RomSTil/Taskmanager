@@ -127,6 +127,14 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in text
     assert outbox.target_id == 42
 
+    recent = service.recent_orders_notification(db_session).text
+    assert "🔵 **Ozon — заказ №10002-0002-1**" in recent
+    assert "📅 Дата заказа: **21.08.2026**" in recent
+    assert "🔢 Количество штук: **2**" in recent
+    assert "• Чеснок товарный × 2" in recent
+    assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in recent
+    assert "🚚 Схема: **FBS** · 💰 **1501.00 RUB**" in recent
+
     repeated = service.sync_account(db_session, account, now=datetime.now(UTC))
     assert repeated["created"] == 0
     assert repeated["notified"] == 0
