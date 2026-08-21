@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,13 @@ from .schemas import OzonAccountCreate
 
 ClientFactory = Callable[[str, str], OzonSellerClient]
 MARKETPLACE_TIMEZONE = ZoneInfo("Europe/Moscow")
+OZON_NOT_SENT_STATUSES = (
+    "awaiting_registration",
+    "awaiting_approve",
+    "awaiting_packaging",
+    "awaiting_deliver",
+    "acceptance_in_progress",
+)
 
 
 def _datetime(value: object) -> datetime | None:
@@ -231,10 +238,16 @@ class OzonSellerService:
         }
 
     def recent_orders_notification(self, session: Session) -> Notification:
+        delivery_priority = case(
+            (OzonPosting.status.in_(OZON_NOT_SENT_STATUSES), 0),
+            (OzonPosting.status == "delivering", 1),
+            (OzonPosting.status == "delivered", 2),
+            else_=3,
+        )
         postings = list(
             session.scalars(
                 select(OzonPosting)
-                .order_by(OzonPosting.first_seen_at.desc())
+                .order_by(delivery_priority, OzonPosting.first_seen_at.desc())
                 .limit(10)
             )
         )
@@ -252,11 +265,10 @@ class OzonSellerService:
                 product_quantity = max(1, int(product.get("quantity") or 1))
                 suffix = f" × {product_quantity}" if product_quantity > 1 else ""
                 lines.append(f"• {name}{suffix}")
-            lines.append(f"📌 Статус: **{ozon_status_label(posting.status)}**")
             if shipment_date := _local_datetime(posting.shipment_date, with_time=True):
                 lines.append(f"⏰ Отгрузить до: **{shipment_date} (МСК)**")
             lines.append(
-                f"🚚 Схема: **{_plain(posting.scheme)}** · "
+                f"🚚 Статус доставки: **{ozon_status_label(posting.status)}** · "
                 f"💰 **{posting.total:.2f} {_plain(posting.currency, 'RUB')}**"
             )
         return Notification("\n".join(lines))

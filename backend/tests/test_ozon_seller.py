@@ -142,9 +142,9 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert "📅 Дата заказа: **21.08.2026**" in recent
     assert "🔢 Количество штук: **2**" in recent
     assert "• Чеснок товарный × 2" in recent
-    assert "📌 Статус: **Ожидает сборки**" in recent
+    assert "🚚 Статус доставки: **Ожидает сборки** · 💰 **1501.00 RUB**" in recent
     assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in recent
-    assert "🚚 Схема: **FBS** · 💰 **1501.00 RUB**" in recent
+    assert "Схема: **FBS**" not in recent
 
     repeated = service.sync_account(db_session, account, now=datetime.now(UTC))
     assert repeated["created"] == 0
@@ -164,6 +164,8 @@ def test_ozon_new_order_is_sent_to_max_once(
         select(OzonPosting).where(OzonPosting.posting_number == "10001-0001-1")
     )
     assert stored and stored.status == "delivered"
+    ordered = service.recent_orders_notification(db_session).text
+    assert ordered.index("10002-0002-1") < ordered.index("10001-0001-1")
 
 
 def test_shipment_plan_aggregates_actionable_marketplace_orders(
