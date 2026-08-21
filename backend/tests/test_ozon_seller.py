@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 from fastapi.testclient import TestClient
@@ -173,6 +173,7 @@ def test_shipment_plan_aggregates_actionable_marketplace_orders(
                 status="PROCESSING",
                 substatus="STARTED",
                 items=[{"offerName": "Чеснок Любаша", "count": 2}],
+                shipment_date=date(2026, 8, 21),
             ),
             MarketOrder(
                 account_id=market_account.id,
@@ -180,6 +181,7 @@ def test_shipment_plan_aggregates_actionable_marketplace_orders(
                 status="PROCESSING",
                 substatus="READY_TO_SHIP",
                 items=[{"offerName": "Чеснок Любаша", "count": 1}],
+                shipment_date=date(2026, 8, 22),
             ),
             MarketOrder(
                 account_id=market_account.id,
@@ -194,6 +196,7 @@ def test_shipment_plan_aggregates_actionable_marketplace_orders(
                 posting_number="2001-1",
                 status="awaiting_packaging",
                 products=[{"name": "Чеснок Любаша", "quantity": 3}],
+                shipment_date=datetime(2026, 8, 22, 7, tzinfo=UTC),
             ),
             OzonPosting(
                 account_id=ozon_account.id,
@@ -201,6 +204,7 @@ def test_shipment_plan_aggregates_actionable_marketplace_orders(
                 posting_number="2002-1",
                 status="awaiting_deliver",
                 products=[{"name": "Чеснок Добрыня", "quantity": 2}],
+                shipment_date=datetime(2026, 8, 23, 7, tzinfo=UTC),
             ),
             OzonPosting(
                 account_id=ozon_account.id,
@@ -214,13 +218,16 @@ def test_shipment_plan_aggregates_actionable_marketplace_orders(
     db_session.commit()
 
     service = client.app.state.module_context.services.get(YandexMarketService)
-    text = service.shipment_plan_notification(db_session).text
+    text = service.shipment_plan_notification(
+        db_session,
+        now=datetime(2026, 8, 21, 12, tzinfo=UTC),
+    ).text
 
-    assert "Всего посылок: **4** · товаров: **8 шт.**" in text
-    assert "🟡 Яндекс Маркет\nПосылок: **2**" in text
-    assert "🔵 Ozon\nПосылок: **2**" in text
-    assert text.count("Чеснок Любаша") == 2
-    assert "Чеснок Любаша — **3 шт.**" in text
+    assert "Сегодня и просрочено · 21.08" in text
+    assert "Посылок: **1** · товаров: **2 шт.**" in text
+    assert "Завтра · 22.08" in text
+    assert "Посылок: **2** · товаров: **4 шт.**" in text
+    assert "Позже" in text
     assert "Чеснок Добрыня — **2 шт.**" in text
     assert "Не учитывать" not in text
 

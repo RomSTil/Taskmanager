@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -53,6 +54,7 @@ class MarketOrder(Base):
     market_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    shipment_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     pack_state: Mapped[str] = mapped_column(String(24), default="available", index=True)
     pack_requested_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pack_requested_name: Mapped[str | None] = mapped_column(String(160), nullable=True)

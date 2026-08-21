@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -46,6 +46,27 @@ def _parse_market_datetime(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=MARKET_TIMEZONE)
     return parsed.astimezone(UTC)
+
+
+def _parse_shipment_date(remote: dict) -> date | None:
+    delivery = remote.get("delivery")
+    if not isinstance(delivery, dict):
+        return None
+    dates: list[date] = []
+    for shipment in delivery.get("shipments") or []:
+        if not isinstance(shipment, dict):
+            continue
+        value = str(shipment.get("shipmentDate") or "").strip()
+        if not value:
+            continue
+        try:
+            dates.append(datetime.strptime(value, "%d-%m-%Y").date())
+        except ValueError:
+            try:
+                dates.append(date.fromisoformat(value))
+            except ValueError:
+                continue
+    return min(dates) if dates else None
 
 
 class YandexMarketService:
@@ -168,6 +189,7 @@ class YandexMarketService:
                     substatus=str(remote.get("substatus") or "STARTED"),
                     items=list(remote.get("items") or []),
                     market_created_at=market_created_at,
+                    shipment_date=_parse_shipment_date(remote),
                     last_seen_at=now,
                 )
                 session.add(order)
@@ -176,6 +198,7 @@ class YandexMarketService:
                 order.status = str(remote.get("status") or order.status)
                 order.substatus = str(remote.get("substatus") or order.substatus or "") or None
                 order.items = list(remote.get("items") or order.items)
+                order.shipment_date = _parse_shipment_date(remote) or order.shipment_date
                 if market_created_at is not None:
                     order.market_created_at = market_created_at
                 order.last_seen_at = now
@@ -266,7 +289,12 @@ class YandexMarketService:
         count = len(self.available_orders(session))
         return Notification(f"📦 Заказов к упаковке: {count}")
 
-    def shipment_plan_notification(self, session: Session) -> Notification:
+    def shipment_plan_notification(
+        self,
+        session: Session,
+        *,
+        now: datetime | None = None,
+    ) -> Notification:
         # Imported lazily to keep the marketplace modules independently loadable.
         from ..ozon_seller.models import OzonPosting
 
@@ -287,36 +315,86 @@ class YandexMarketService:
             )
         )
 
-        market_items = self._aggregate_items(
-            (item.get("offerName") or item.get("offerId") or "Товар", item.get("count"))
-            for order in market_orders
-            for item in order.items
+        today = (now or datetime.now(UTC)).astimezone(MARKET_TIMEZONE).date()
+        tomorrow = today + timedelta(days=1)
+        entries: list[tuple[str, str, list[dict]]] = []
+        for order in market_orders:
+            entries.append(
+                (self._shipment_bucket(order.shipment_date, today), "market", order.items)
+            )
+        for posting in ozon_postings:
+            shipment_date = posting.shipment_date
+            if shipment_date is not None:
+                if shipment_date.tzinfo is None:
+                    shipment_date = shipment_date.replace(tzinfo=UTC)
+                local_date = shipment_date.astimezone(MARKET_TIMEZONE).date()
+            else:
+                local_date = None
+            entries.append(
+                (self._shipment_bucket(local_date, today), "ozon", posting.products)
+            )
+
+        lines = ["📋 **План отправок**"]
+        periods = (
+            ("today", f"Сегодня и просрочено · {today:%d.%m}"),
+            ("tomorrow", f"Завтра · {tomorrow:%d.%m}"),
+            ("later", "Позже"),
+            ("unknown", "Без указанной даты"),
         )
-        ozon_items = self._aggregate_items(
-            (item.get("name") or item.get("offer_id") or "Товар", item.get("quantity"))
-            for posting in ozon_postings
-            for item in posting.products
+        for key, label in periods:
+            period_entries = [entry for entry in entries if entry[0] == key]
+            if key in {"today", "tomorrow"} or period_entries:
+                self._append_plan_period(lines, label=label, entries=period_entries)
+        lines.append("\nУчитываются FBS-заказы, которые ещё нужно собрать или передать.")
+        return Notification("\n".join(lines))
+
+    @staticmethod
+    def _shipment_bucket(shipment_date: date | None, today: date) -> str:
+        if shipment_date is None:
+            return "unknown"
+        if shipment_date <= today:
+            return "today"
+        if shipment_date == today + timedelta(days=1):
+            return "tomorrow"
+        return "later"
+
+    @classmethod
+    def _append_plan_period(
+        cls,
+        lines: list[str],
+        *,
+        label: str,
+        entries: list[tuple[str, str, list[dict]]],
+    ) -> None:
+        market_entries = [items for _, platform, items in entries if platform == "market"]
+        ozon_entries = [items for _, platform, items in entries if platform == "ozon"]
+        total_items = cls._aggregate_items(
+            cls._item_values(platform, item)
+            for _, platform, items in entries
+            for item in items
         )
-        parcel_count = len(market_orders) + len(ozon_postings)
-        item_count = sum(market_items.values()) + sum(ozon_items.values())
-        lines = [
-            "📋 **Что отправить сегодня**",
-            f"Всего посылок: **{parcel_count}** · товаров: **{item_count} шт.**",
-        ]
-        self._append_shipment_section(
+        lines.append(
+            f"\n📅 **{label}**\n"
+            f"Посылок: **{len(entries)}** · товаров: **{sum(total_items.values())} шт.**"
+        )
+        cls._append_shipment_section(
             lines,
             title="🟡 Яндекс Маркет",
-            parcel_count=len(market_orders),
-            items=market_items,
+            entries=market_entries,
+            platform="market",
         )
-        self._append_shipment_section(
+        cls._append_shipment_section(
             lines,
             title="🔵 Ozon",
-            parcel_count=len(ozon_postings),
-            items=ozon_items,
+            entries=ozon_entries,
+            platform="ozon",
         )
-        lines.append("\nУчитываются заказы, которые ещё нужно собрать или передать в доставку.")
-        return Notification("\n".join(lines))
+
+    @staticmethod
+    def _item_values(platform: str, item: dict) -> tuple[object, object]:
+        if platform == "market":
+            return item.get("offerName") or item.get("offerId") or "Товар", item.get("count")
+        return item.get("name") or item.get("offer_id") or "Товар", item.get("quantity")
 
     @staticmethod
     def _aggregate_items(items: Iterable[tuple[object, object]]) -> dict[str, int]:
@@ -335,13 +413,17 @@ class YandexMarketService:
         lines: list[str],
         *,
         title: str,
-        parcel_count: int,
-        items: dict[str, int],
+        entries: list[list[dict]],
+        platform: str,
     ) -> None:
-        lines.append(f"\n{title}\nПосылок: **{parcel_count}**")
-        if not items:
-            lines.append("• Отправлений нет")
+        if not entries:
             return
+        items = YandexMarketService._aggregate_items(
+            YandexMarketService._item_values(platform, item)
+            for order_items in entries
+            for item in order_items
+        )
+        lines.append(f"\n{title} · **{len(entries)} пос.**")
         lines.extend(f"• {name} — **{quantity} шт.**" for name, quantity in items.items())
 
     def status_notification(self, session: Session) -> Notification:
@@ -401,6 +483,7 @@ class YandexMarketService:
     def _apply_remote_state(order: MarketOrder, remote: dict) -> None:
         order.status = str(remote.get("status") or order.status)
         order.substatus = str(remote.get("substatus") or "") or None
+        order.shipment_date = _parse_shipment_date(remote) or order.shipment_date
 
     @staticmethod
     def _remote_pack_completed(status: str, substatus: str | None) -> bool:

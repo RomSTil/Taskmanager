@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
@@ -26,6 +26,7 @@ class FakeMarketClient:
                 "status": "PROCESSING",
                 "substatus": "STARTED",
                 "creationDate": "21-08-2026 11:18:00",
+                "delivery": {"shipments": [{"shipmentDate": "22-08-2026"}]},
                 "items": [
                     {"offerId": "sku-1", "offerName": "Чехол для инструмента", "count": 2}
                 ],
@@ -230,6 +231,7 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
     assert sync_response.json() == {"new_orders": 1}
     order = db_session.scalar(select(MarketOrder).where(MarketOrder.market_order_id == 9001))
     assert order
+    assert order.shipment_date == date(2026, 8, 22)
     notifications = list(
         db_session.scalars(
             select(MaxOutboxMessage).where(
