@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.event_bus.models import DomainEvent
+from app.modules.integrations.max_bot import router as max_router
 from app.modules.integrations.max_bot.client import MaxApiClient
 from app.modules.integrations.max_bot.models import (
     MaxAccessRequest,
@@ -367,13 +368,26 @@ def test_max_callback_answers_with_waiting_state_and_returns_metrics(
     )
     db_session.commit()
     answered: dict = {}
+    animation: dict = {}
 
     def fake_answer(self, callback_id: str, payload: dict) -> dict:
         answered["callback_id"] = callback_id
         answered["payload"] = payload
         return {"success": True}
 
+    class FakeAnimation:
+        def __init__(self, _client, message_id: str, action_label: str) -> None:
+            animation["message_id"] = message_id
+            animation["action_label"] = action_label
+
+        def start(self) -> None:
+            animation["started"] = True
+
+        def finish(self) -> None:
+            animation["finished"] = True
+
     monkeypatch.setattr(MaxApiClient, "answer_callback", fake_answer)
+    monkeypatch.setattr(max_router, "WaitingMessageAnimation", FakeAnimation)
     update = {
         "update_type": "message_callback",
         "timestamp": int(datetime.now(UTC).timestamp() * 1000),
@@ -381,6 +395,7 @@ def test_max_callback_answers_with_waiting_state_and_returns_metrics(
             "callback_id": "callback-123",
             "payload": "direct.today",
         },
+        "message": {"body": {"mid": "mid.waiting"}},
         "user": {"user_id": 42, "name": "Owner"},
     }
     headers = {"X-Max-Bot-Api-Secret": bot["webhook_secret"]}
@@ -392,6 +407,12 @@ def test_max_callback_answers_with_waiting_state_and_returns_metrics(
     assert response.status_code == 200, response.text
     assert answered["callback_id"] == "callback-123"
     assert "Пожалуйста, подождите" in answered["payload"]["text"]
+    assert animation == {
+        "message_id": "mid.waiting",
+        "action_label": "Сегодня",
+        "started": True,
+        "finished": True,
+    }
 
     messages = list(db_session.scalars(select(MaxOutboxMessage)))
     assert len(messages) == 1
@@ -617,6 +638,42 @@ def test_max_client_answers_callback() -> None:
     assert captured["path"].endswith("/answers")
     assert captured["query"] == {"callback_id": "callback-123"}
     assert captured["body"] == {"message": {"text": "waiting"}}
+
+
+def test_max_client_edits_and_deletes_message() -> None:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "query": dict(request.url.params),
+                "body": json.loads(request.content) if request.content else None,
+            }
+        )
+        return httpx.Response(200, json={"success": True})
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http_client:
+        max_client = MaxApiClient("secret-token", http_client=http_client)
+        max_client.edit_message("mid.waiting", {"text": "waiting."})
+        max_client.delete_message("mid.waiting")
+
+    assert captured == [
+        {
+            "method": "PUT",
+            "path": "/messages",
+            "query": {"message_id": "mid.waiting"},
+            "body": {"text": "waiting."},
+        },
+        {
+            "method": "DELETE",
+            "path": "/messages",
+            "query": {"message_id": "mid.waiting"},
+            "body": None,
+        },
+    ]
 
 
 def test_yandex_client_uses_bearer_token_and_client_login() -> None:

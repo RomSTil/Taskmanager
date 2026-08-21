@@ -11,6 +11,7 @@ from ....dependencies import Principal, get_principal
 from ....security import constant_time_equal, decrypt_secret, hash_token
 from ...notifications.service import InteractionRegistry
 from ..yandex_market.service import YandexMarketService
+from .animation import WaitingMessageAnimation
 from .client import MaxApiClient
 from .formatter import (
     access_denied_payload,
@@ -70,6 +71,12 @@ def _callback_action(update: dict[str, Any]) -> str:
 def _callback_id(update: dict[str, Any]) -> str:
     callback = update.get("callback") or {}
     return str(callback.get("callback_id") or "").strip()
+
+
+def _message_id(update: dict[str, Any]) -> str:
+    message = update.get("message") or {}
+    body = message.get("body") or {}
+    return str(body.get("mid") or message.get("message_id") or message.get("id") or "").strip()
 
 
 def _sender_name(update: dict[str, Any], user_id: int) -> str:
@@ -493,15 +500,17 @@ def max_webhook(
             )
             session.commit()
             return {"accepted": True}
-        wait_payload = waiting_payload(interactions.label_for(action))
+        action_label = interactions.label_for(action)
+        wait_payload = waiting_payload(action_label)
         callback_answered = False
         callback_id = _callback_id(update)
+        max_client = MaxApiClient(
+            decrypt_secret(bot.token_encrypted),
+            verify_tls=service.settings.max_api_tls_verify,
+        )
         if callback_id:
             try:
-                MaxApiClient(
-                    decrypt_secret(bot.token_encrypted),
-                    verify_tls=service.settings.max_api_tls_verify,
-                ).answer_callback(callback_id, wait_payload)
+                max_client.answer_callback(callback_id, wait_payload)
                 callback_answered = True
             except Exception:  # noqa: BLE001
                 # The result still goes through the durable outbox if MAX cannot
@@ -509,7 +518,16 @@ def max_webhook(
                 callback_answered = False
         if not callback_answered:
             service.queue(session, bot, target_type, target_id, wait_payload)
-        notification = interactions.handle(action, session)
+        animation = None
+        message_id = _message_id(update)
+        if callback_answered and message_id:
+            animation = WaitingMessageAnimation(max_client, message_id, action_label)
+            animation.start()
+        try:
+            notification = interactions.handle(action, session)
+        finally:
+            if animation is not None:
+                animation.finish()
         service.queue(
             session,
             bot,

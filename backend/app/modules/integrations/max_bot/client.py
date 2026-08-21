@@ -72,6 +72,25 @@ class MaxApiClient:
             payload={"message": payload},
         )
 
+    def edit_message(
+        self,
+        message_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            "/messages",
+            params={"message_id": message_id},
+            payload=payload,
+        )
+
+    def delete_message(self, message_id: str) -> dict[str, Any]:
+        return self._request(
+            "DELETE",
+            "/messages",
+            params={"message_id": message_id},
+        )
+
     def register_webhook(
         self,
         url: str,

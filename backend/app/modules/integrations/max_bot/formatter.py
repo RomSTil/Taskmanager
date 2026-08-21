@@ -35,9 +35,12 @@ def notification_payload(
     return payload
 
 
-def waiting_payload(action_label: str) -> dict:
+def waiting_payload(action_label: str, dots: int = 0) -> dict:
     return {
-        "text": f"⏳ Запрашиваю: {action_label}\nПожалуйста, подождите ответа сервера…",
+        "text": (
+            f"⏳ Запрашиваю: {action_label}\n"
+            f"Пожалуйста, подождите ответа сервера{'.' * (dots % 4)}"
+        ),
         "format": "markdown",
         "notify": False,
     }
