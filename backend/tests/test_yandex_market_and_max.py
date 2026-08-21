@@ -28,7 +28,12 @@ class FakeMarketClient:
                 "creationDate": "21-08-2026 11:18:00",
                 "delivery": {"shipments": [{"shipmentDate": "22-08-2026"}]},
                 "items": [
-                    {"offerId": "sku-1", "offerName": "Чехол для инструмента", "count": 2}
+                    {
+                        "offerId": "sku-1",
+                        "offerName": "Чехол для инструмента",
+                        "buyerPrice": 615,
+                        "count": 2,
+                    }
                 ],
             }
         ]
@@ -232,6 +237,17 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
     order = db_session.scalar(select(MarketOrder).where(MarketOrder.market_order_id == 9001))
     assert order
     assert order.shipment_date == date(2026, 8, 22)
+    listing = service.orders_payload(db_session, can_pack=True)
+    assert "📦 **Последние заказы Yandex**" in listing["text"]
+    assert "🟡 **Яндекс Маркет — заказ №9001**" in listing["text"]
+    assert "📅 Дата заказа: **21.08.2026**" in listing["text"]
+    assert "🔢 Количество штук: **2**" in listing["text"]
+    assert "⏰ Отгрузить до: **22.08.2026**" in listing["text"]
+    assert "🚚 Статус доставки: **Ожидает сборки**" in listing["text"]
+    assert "💰 **1230.00 RUB**" in listing["text"]
+    assert listing["attachments"][0]["payload"]["buttons"][0][0]["payload"] == (
+        f"market.pack:{order.id}"
+    )
     notifications = list(
         db_session.scalars(
             select(MaxOutboxMessage).where(
@@ -269,6 +285,9 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
     assert order.pack_state == "packed"
     assert order.substatus == "READY_TO_SHIP"
     assert fake_market.ready_order_ids == [9001]
+    packed_listing = service.orders_payload(db_session, can_pack=True)
+    assert "🚚 Статус доставки: **Ожидает отгрузки**" in packed_listing["text"]
+    assert "attachments" not in packed_listing
     messages = list(db_session.scalars(select(MaxOutboxMessage)))
     assert any(
         message.target_id == 42

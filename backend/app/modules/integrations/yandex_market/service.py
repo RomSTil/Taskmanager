@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -282,8 +282,35 @@ class YandexMarketService:
             )
         )
 
+    def recent_orders(self, session: Session) -> list[MarketOrder]:
+        delivery_priority = case(
+            (
+                MarketOrder.status == "PROCESSING",
+                case(
+                    (MarketOrder.substatus.in_(("STARTED", "READY_TO_SHIP")), 0),
+                    else_=1,
+                ),
+            ),
+            (MarketOrder.status.in_(("DELIVERY", "PICKUP")), 1),
+            (MarketOrder.status == "DELIVERED", 2),
+            else_=3,
+        )
+        return list(
+            session.scalars(
+                select(MarketOrder)
+                .order_by(
+                    delivery_priority,
+                    func.coalesce(
+                        MarketOrder.market_created_at,
+                        MarketOrder.discovered_at,
+                    ).desc(),
+                )
+                .limit(10)
+            )
+        )
+
     def orders_payload(self, session: Session, *, can_pack: bool) -> dict:
-        return orders_payload(self.available_orders(session), can_pack=can_pack)
+        return orders_payload(self.recent_orders(session), can_pack=can_pack)
 
     def orders_notification(self, session: Session) -> Notification:
         count = len(self.available_orders(session))
