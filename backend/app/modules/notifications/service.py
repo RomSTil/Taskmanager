@@ -10,6 +10,26 @@ from sqlalchemy.orm import Session
 from ..event_bus.models import DomainEvent
 
 MARKETPLACE_TIMEZONE = ZoneInfo("Europe/Moscow")
+OZON_STATUS_LABELS = {
+    "awaiting_registration": "Ожидает регистрации",
+    "acceptance_in_progress": "Принимается Ozon",
+    "awaiting_approve": "Ожидает подтверждения",
+    "awaiting_packaging": "Ожидает сборки",
+    "awaiting_deliver": "Ожидает отгрузки",
+    "arbitration": "На арбитраже",
+    "client_arbitration": "На клиентском арбитраже",
+    "delivering": "Доставляется",
+    "driver_pickup": "Передаётся курьеру",
+    "delivered": "Доставлен",
+    "cancelled": "Отменён",
+    "not_accepted": "Не принят",
+    "sent_by_seller": "Отправлен продавцом",
+}
+
+
+def ozon_status_label(value: object) -> str:
+    status = str(value or "").strip().casefold()
+    return OZON_STATUS_LABELS.get(status, "Неизвестный статус")
 
 
 def _plain(value: object, fallback: str = "") -> str:
@@ -17,10 +37,6 @@ def _plain(value: object, fallback: str = "") -> str:
     for character in "*_[`]":
         text = text.replace(character, "")
     return text
-
-
-def _code(value: object, fallback: str = "") -> str:
-    return str(value or fallback).strip().replace("`", "")
 
 
 def _quantity(value: object) -> int:
@@ -144,7 +160,7 @@ class NotificationService:
                     "",
                     f"🏪 Кабинет: {_plain(payload.get('account_name'), 'Не указан')}",
                     f"🚚 Схема: **{_plain(payload.get('scheme'), 'Не указана')}**",
-                    f"📌 Статус: `{_code(payload.get('status'), 'не указан')}`",
+                    f"📌 Статус: **{ozon_status_label(payload.get('status'))}**",
                     (
                         f"💰 Сумма: **{float(payload.get('total', 0)):.2f} "
                         f"{_plain(payload.get('currency'), 'RUB')}**"

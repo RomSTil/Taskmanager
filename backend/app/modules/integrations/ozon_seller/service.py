@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ....security import decrypt_secret, encrypt_secret
 from ...event_bus.events import OzonOrderCreated
 from ...event_bus.service import EventBusService
-from ...notifications.service import Notification
+from ...notifications.service import Notification, ozon_status_label
 from .client import OzonSellerClient
 from .models import OzonPosting, OzonSellerAccount
 from .schemas import OzonAccountCreate
@@ -252,6 +252,7 @@ class OzonSellerService:
                 product_quantity = max(1, int(product.get("quantity") or 1))
                 suffix = f" × {product_quantity}" if product_quantity > 1 else ""
                 lines.append(f"• {name}{suffix}")
+            lines.append(f"📌 Статус: **{ozon_status_label(posting.status)}**")
             if shipment_date := _local_datetime(posting.shipment_date, with_time=True):
                 lines.append(f"⏰ Отгрузить до: **{shipment_date} (МСК)**")
             lines.append(

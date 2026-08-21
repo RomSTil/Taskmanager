@@ -13,7 +13,11 @@ from app.modules.integrations.ozon_seller.models import OzonPosting, OzonSellerA
 from app.modules.integrations.ozon_seller.service import OzonSellerService
 from app.modules.integrations.yandex_market.models import MarketOrder, YandexMarketAccount
 from app.modules.integrations.yandex_market.service import YandexMarketService
-from app.modules.notifications.service import InteractionRegistry, NotificationService
+from app.modules.notifications.service import (
+    InteractionRegistry,
+    NotificationService,
+    ozon_status_label,
+)
 from app.security import encrypt_secret
 
 
@@ -35,6 +39,12 @@ def posting(number: str, name: str = "Чеснок посадочный") -> dic
             }
         ],
     }
+
+
+def test_ozon_statuses_are_translated() -> None:
+    assert ozon_status_label("awaiting_deliver") == "Ожидает отгрузки"
+    assert ozon_status_label("delivering") == "Доставляется"
+    assert ozon_status_label("unexpected_status") == "Неизвестный статус"
 
 
 class FakeOzonClient:
@@ -122,7 +132,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert "📅 Дата заказа: **21.08.2026**" in text
     assert "🔢 Количество штук: **2**" in text
     assert "• Чеснок товарный × 2" in text
-    assert "📌 Статус: `awaiting_packaging`" in text
+    assert "📌 Статус: **Ожидает сборки**" in text
     assert "💰 Сумма: **1501.00 RUB**" in text
     assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in text
     assert outbox.target_id == 42
@@ -132,6 +142,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert "📅 Дата заказа: **21.08.2026**" in recent
     assert "🔢 Количество штук: **2**" in recent
     assert "• Чеснок товарный × 2" in recent
+    assert "📌 Статус: **Ожидает сборки**" in recent
     assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in recent
     assert "🚚 Схема: **FBS** · 💰 **1501.00 RUB**" in recent
 
