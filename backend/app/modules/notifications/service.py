@@ -2,11 +2,42 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..event_bus.models import DomainEvent
+
+MARKETPLACE_TIMEZONE = ZoneInfo("Europe/Moscow")
+
+
+def _plain(value: object, fallback: str = "") -> str:
+    text = str(value or fallback).strip()
+    for character in "*_[`]":
+        text = text.replace(character, "")
+    return text
+
+
+def _quantity(value: object) -> int:
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _local_datetime(value: object, *, with_time: bool = False) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    pattern = "%d.%m.%Y, %H:%M" if with_time else "%d.%m.%Y"
+    return parsed.astimezone(MARKETPLACE_TIMEZONE).strftime(pattern)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,29 +112,45 @@ class NotificationService:
         payload = event.payload
         if event.event_type == "OzonOrderCreated":
             products = payload.get("products") or []
-            product_lines = []
+            product_lines: list[str] = []
             total_quantity = 0
             for product in products[:8]:
-                quantity = int(product.get("quantity") or 0)
+                quantity = _quantity(product.get("quantity"))
                 total_quantity += quantity
-                product_lines.append(f"• {product.get('name', 'Товар')} × {quantity}")
+                name = _plain(product.get("name"), "Товар")
+                product_lines.append(f"• {name}" + (f" × {quantity}" if quantity > 1 else ""))
             total_quantity += sum(
-                int(product.get("quantity") or 0) for product in products[8:]
+                _quantity(product.get("quantity")) for product in products[8:]
             )
             if len(products) > 8:
                 product_lines.append(f"• и ещё {len(products) - 8} позиций")
-            shipment = payload.get("shipment_date")
-            shipment_text = f"\nОтгрузить до: {shipment}" if shipment else ""
+            if not product_lines:
+                product_lines.append("• Состав заказа не указан")
+            posting_number = _plain(
+                payload.get("posting_number"),
+                event.aggregate_id,
+            )
+            lines = [f"🔵 **Ozon — новый заказ №{posting_number}**"]
+            if created_at := _local_datetime(payload.get("created_at")):
+                lines.append(f"📅 Дата заказа: **{created_at}**")
+            lines.append(f"🔢 Количество штук: **{total_quantity}**")
+            lines.extend(product_lines)
+            lines.extend(
+                [
+                    "",
+                    f"🏪 Кабинет: {_plain(payload.get('account_name'), 'Не указан')}",
+                    f"🚚 Схема: **{_plain(payload.get('scheme'), 'Не указана')}**",
+                    f"📌 Статус: `{_plain(payload.get('status'), 'не указан')}`",
+                    (
+                        f"💰 Сумма: **{float(payload.get('total', 0)):.2f} "
+                        f"{_plain(payload.get('currency'), 'RUB')}**"
+                    ),
+                ]
+            )
+            if shipment := _local_datetime(payload.get("shipment_date"), with_time=True):
+                lines.append(f"⏰ Отгрузить до: **{shipment} (МСК)**")
             return Notification(
-                "🛒 **Новый заказ Ozon**\n"
-                f"Кабинет: {payload.get('account_name', '')}\n"
-                f"Отправление: `{payload.get('posting_number', event.aggregate_id)}`\n"
-                f"Схема: {payload.get('scheme', '')} · Статус: {payload.get('status', '')}\n"
-                f"Товаров: {total_quantity} шт.\n"
-                + "\n".join(product_lines)
-                + f"\nСумма: {float(payload.get('total', 0)):.2f} "
-                f"{payload.get('currency', 'RUB')}"
-                + shipment_text
+                "\n".join(lines)
             )
         if event.event_type == "BudgetRunningLow":
             days = payload.get("days_left")

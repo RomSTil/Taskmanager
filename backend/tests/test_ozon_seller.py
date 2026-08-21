@@ -6,8 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.event_bus.models import DomainEvent
-from app.modules.integrations.max_bot.models import MaxOutboxMessage
 from app.modules.integrations.max_bot.formatter import menu_payload
+from app.modules.integrations.max_bot.models import MaxOutboxMessage
 from app.modules.integrations.ozon_seller.client import OzonSellerClient
 from app.modules.integrations.ozon_seller.models import OzonPosting, OzonSellerAccount
 from app.modules.integrations.ozon_seller.service import OzonSellerService
@@ -112,8 +112,13 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert notifications.dispatch_pending(db_session) == 1
     outbox = db_session.scalar(select(MaxOutboxMessage))
     assert outbox
-    assert "Новый заказ Ozon" in outbox.payload["text"]
-    assert "Чеснок товарный" in outbox.payload["text"]
+    text = outbox.payload["text"]
+    assert "🔵 **Ozon — новый заказ №10002-0002-1**" in text
+    assert "📅 Дата заказа: **19.08.2026**" in text
+    assert "🔢 Количество штук: **2**" in text
+    assert "• Чеснок товарный × 2" in text
+    assert "💰 Сумма: **1501.00 RUB**" in text
+    assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in text
     assert outbox.target_id == 42
 
     repeated = service.sync_account(db_session, account, now=datetime.now(UTC))

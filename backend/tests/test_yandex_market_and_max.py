@@ -22,6 +22,7 @@ class FakeMarketClient:
                 "id": 9001,
                 "status": "PROCESSING",
                 "substatus": "STARTED",
+                "creationDate": "21-08-2026 11:18:00",
                 "items": [
                     {"offerId": "sku-1", "offerName": "Чехол для инструмента", "count": 2}
                 ],
@@ -187,12 +188,16 @@ def test_market_bot_registration_roles_notification_and_pack_flow(
     notifications = list(
         db_session.scalars(
             select(MaxOutboxMessage).where(
-                MaxOutboxMessage.payload["text"].as_string().contains("Новый заказ №9001")
+                MaxOutboxMessage.payload["text"]
+                .as_string()
+                .contains("Яндекс Маркет — новый заказ №9001")
             )
         )
     )
     assert {message.target_id for message in notifications} == {42, 77}
     picker_message = next(message for message in notifications if message.target_id == 77)
+    assert "📅 Дата заказа: **21.08.2026**" in picker_message.payload["text"]
+    assert "🔢 Количество штук: **2**" in picker_message.payload["text"]
     pack_action = picker_message.payload["attachments"][0]["payload"]["buttons"][0][0][
         "payload"
     ]

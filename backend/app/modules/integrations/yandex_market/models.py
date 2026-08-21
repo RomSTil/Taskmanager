@@ -50,6 +50,9 @@ class MarketOrder(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     substatus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    market_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     pack_state: Mapped[str] = mapped_column(String(24), default="available", index=True)
     pack_requested_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pack_requested_name: Mapped[str | None] = mapped_column(String(160), nullable=True)

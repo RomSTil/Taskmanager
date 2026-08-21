@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +21,28 @@ from .models import MarketOrder, YandexMarketAccount
 from .schemas import MarketAccountCreate, MarketAccountUpdate
 
 ClientFactory = Callable[[str, int], YandexMarketClient]
+MARKET_TIMEZONE = ZoneInfo("Europe/Moscow")
+
+
+def _parse_market_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.strptime(text, "%d-%m-%Y %H:%M:%S").replace(
+                tzinfo=MARKET_TIMEZONE
+            )
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MARKET_TIMEZONE)
+    return parsed.astimezone(UTC)
 
 
 class YandexMarketService:
@@ -126,6 +149,7 @@ class YandexMarketService:
         created = 0
         for remote in client.get_processing_orders():
             market_order_id = int(remote["id"])
+            market_created_at = _parse_market_datetime(remote.get("creationDate"))
             order = session.scalar(
                 select(MarketOrder).where(
                     MarketOrder.account_id == account.id,
@@ -140,6 +164,7 @@ class YandexMarketService:
                     status=str(remote.get("status") or "PROCESSING"),
                     substatus=str(remote.get("substatus") or "STARTED"),
                     items=list(remote.get("items") or []),
+                    market_created_at=market_created_at,
                     last_seen_at=now,
                 )
                 session.add(order)
@@ -148,6 +173,8 @@ class YandexMarketService:
                 order.status = str(remote.get("status") or order.status)
                 order.substatus = str(remote.get("substatus") or order.substatus or "") or None
                 order.items = list(remote.get("items") or order.items)
+                if market_created_at is not None:
+                    order.market_created_at = market_created_at
                 order.last_seen_at = now
                 if order.substatus == "STARTED" and order.pack_state == "failed":
                     order.pack_state = "available"
