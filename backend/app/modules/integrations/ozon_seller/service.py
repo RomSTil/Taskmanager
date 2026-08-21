@@ -83,6 +83,9 @@ class OzonSellerService:
     ) -> dict[str, object]:
         now = now or datetime.now(UTC)
         baseline = not account.baseline_completed
+        notify_after = account.last_checked_at
+        if notify_after is not None and notify_after.tzinfo is None:
+            notify_after = notify_after.replace(tzinfo=UTC)
         # Ozon filters postings by their creation date, not by the date of the
         # latest status change. Keep the lookback window so completed postings
         # disappear from shipment plans after subsequent syncs.
@@ -163,7 +166,11 @@ class OzonSellerService:
                 session.add(posting)
                 session.flush()
                 created += 1
-                if baseline:
+                if baseline or (
+                    notify_after is not None
+                    and posting.ozon_created_at is not None
+                    and posting.ozon_created_at <= notify_after
+                ):
                     continue
                 self.event_bus.publish(
                     session,

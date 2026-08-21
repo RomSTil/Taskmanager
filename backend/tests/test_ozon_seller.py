@@ -102,6 +102,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert db_session.scalar(select(func.count()).select_from(DomainEvent)) == 0
 
     fake.fbs.append(posting("10002-0002-1", "Чеснок товарный"))
+    fake.fbs[-1]["created_at"] = datetime.now(UTC).isoformat()
     result = service.sync_account(db_session, account, now=datetime.now(UTC))
     assert result["created"] == 1
     assert result["notified"] == 1
@@ -118,7 +119,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert outbox
     text = outbox.payload["text"]
     assert "🔵 **Ozon — новый заказ №10002-0002-1**" in text
-    assert "📅 Дата заказа: **19.08.2026**" in text
+    assert "📅 Дата заказа: **21.08.2026**" in text
     assert "🔢 Количество штук: **2**" in text
     assert "• Чеснок товарный × 2" in text
     assert "📌 Статус: `awaiting_packaging`" in text
@@ -130,6 +131,12 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert repeated["created"] == 0
     assert repeated["notified"] == 0
     assert db_session.scalar(select(func.count()).select_from(OzonPosting)) == 2
+    assert db_session.scalar(select(func.count()).select_from(DomainEvent)) == 1
+
+    fake.fbs.append(posting("10003-0003-1", "Старый заказ"))
+    historical = service.sync_account(db_session, account, now=datetime.now(UTC))
+    assert historical["created"] == 1
+    assert historical["notified"] == 0
     assert db_session.scalar(select(func.count()).select_from(DomainEvent)) == 1
 
     fake.fbs[0]["status"] = "delivered"
