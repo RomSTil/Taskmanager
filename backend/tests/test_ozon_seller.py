@@ -117,6 +117,7 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert "📅 Дата заказа: **19.08.2026**" in text
     assert "🔢 Количество штук: **2**" in text
     assert "• Чеснок товарный × 2" in text
+    assert "📌 Статус: `awaiting_packaging`" in text
     assert "💰 Сумма: **1501.00 RUB**" in text
     assert "⏰ Отгрузить до: **20.08.2026, 15:00 (МСК)**" in text
     assert outbox.target_id == 42

@@ -19,6 +19,10 @@ def _plain(value: object, fallback: str = "") -> str:
     return text
 
 
+def _code(value: object, fallback: str = "") -> str:
+    return str(value or fallback).strip().replace("`", "")
+
+
 def _quantity(value: object) -> int:
     try:
         return max(1, int(value or 1))
@@ -140,7 +144,7 @@ class NotificationService:
                     "",
                     f"🏪 Кабинет: {_plain(payload.get('account_name'), 'Не указан')}",
                     f"🚚 Схема: **{_plain(payload.get('scheme'), 'Не указана')}**",
-                    f"📌 Статус: `{_plain(payload.get('status'), 'не указан')}`",
+                    f"📌 Статус: `{_code(payload.get('status'), 'не указан')}`",
                     (
                         f"💰 Сумма: **{float(payload.get('total', 0)):.2f} "
                         f"{_plain(payload.get('currency'), 'RUB')}**"
