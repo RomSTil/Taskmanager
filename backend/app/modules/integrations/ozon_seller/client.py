@@ -75,10 +75,18 @@ class OzonSellerClient:
                     "financial_data": True,
                 },
             }
-            result = self._post(path, payload).get("result") or {}
-            page = result.get("postings") or []
+            result = self._post(path, payload).get("result")
+            if isinstance(result, dict):
+                page = result.get("postings") or []
+                has_next = bool(result.get("has_next"))
+            elif isinstance(result, list):
+                # FBO v2 returns postings directly in result, unlike FBS v3.
+                page = result
+                has_next = len(page) >= payload["limit"]
+            else:
+                raise OzonApiError("Ozon Seller API returned an invalid postings result")
             postings.extend(item for item in page if isinstance(item, dict))
-            if not result.get("has_next") or not page:
+            if not has_next or not page:
                 return postings
             offset += len(page)
 

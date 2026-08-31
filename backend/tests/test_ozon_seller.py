@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi.testclient import TestClient
@@ -116,7 +117,8 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert db_session.scalar(select(func.count()).select_from(DomainEvent)) == 0
 
     fake.fbs.append(posting("10002-0002-1", "Чеснок товарный"))
-    fake.fbs[-1]["created_at"] = datetime.now(UTC).isoformat()
+    new_order_time = datetime.now(UTC)
+    fake.fbs[-1]["created_at"] = new_order_time.isoformat()
     result = service.sync_account(db_session, account, now=datetime.now(UTC))
     assert result["created"] == 1
     assert result["notified"] == 1
@@ -133,7 +135,8 @@ def test_ozon_new_order_is_sent_to_max_once(
     assert outbox
     text = outbox.payload["text"]
     assert "🔵 **Ozon — новый заказ №10002-0002-1**" in text
-    assert "📅 Дата заказа: **21.08.2026**" in text
+    expected_date = new_order_time.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
+    assert f"📅 Дата заказа: **{expected_date}**" in text
     assert "🔢 Количество штук: **2**" in text
     assert "• Чеснок товарный × 2" in text
     assert "📌 Статус: **Ожидает сборки**" in text
@@ -143,7 +146,7 @@ def test_ozon_new_order_is_sent_to_max_once(
 
     recent = service.recent_orders_notification(db_session).text
     assert "🔵 **Ozon — заказ №10002-0002-1**" in recent
-    assert "📅 Дата заказа: **21.08.2026**" in recent
+    assert f"📅 Дата заказа: **{expected_date}**" in recent
     assert "🔢 Количество штук: **2**" in recent
     assert "• Чеснок товарный × 2" in recent
     assert "🚚 Статус доставки: **Ожидает сборки** · 💰 **1501.00 RUB**" in recent
@@ -289,3 +292,21 @@ def test_ozon_client_sends_credentials_and_paginates() -> None:
     assert requests[0].headers["Client-Id"] == "client-123"
     assert requests[0].headers["Api-Key"] == "secret-key"
     assert requests[0].url.path == "/v3/posting/fbs/list"
+
+
+def test_ozon_client_accepts_fbo_result_array() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/posting/fbo/list"
+        return httpx.Response(200, json={"result": [posting("30001-0001-1")]})
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api-seller.ozon.ru",
+    ) as http_client:
+        api = OzonSellerClient("client-123", "secret-key", http_client=http_client)
+        result = api.list_fbo_postings(
+            datetime(2026, 8, 18, tzinfo=UTC),
+            datetime(2026, 8, 19, tzinfo=UTC),
+        )
+
+    assert [item["posting_number"] for item in result] == ["30001-0001-1"]
