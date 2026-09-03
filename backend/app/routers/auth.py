@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_session
 from ..dependencies import Principal, get_principal
-from ..models import AuthToken, User
+from ..core.errors import AuthorizationError
+from ..models import AuthToken, User, UserAccessLog, UserRole
 from ..schemas import (
     ApiTokenCreate,
     ApiTokenCreated,
@@ -15,7 +16,11 @@ from ..schemas import (
     SetupRequest,
     SetupState,
     TokenPair,
+    UserCreate,
+    UserAccessLogRead,
+    UserProfileUpdate,
     UserRead,
+    UserRoleUpdate,
 )
 from ..services.auth import AuthService, LoginRateLimiter
 
@@ -43,17 +48,19 @@ def setup_state(service: AuthServiceDependency) -> SetupState:
 @router.post("/setup", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
 def setup(
     payload: SetupRequest,
+    request: Request,
     service: AuthServiceDependency,
     setup_token: Annotated[str | None, Header(alias="X-Setup-Token")] = None,
 ) -> TokenPair:
-    return service.setup(payload, setup_token)
+    client_host = request.client.host if request.client else "unknown"
+    return service.setup(payload, setup_token, client_host)
 
 
 @router.post("/login", response_model=TokenPair)
 def login(payload: LoginRequest, request: Request, service: AuthServiceDependency) -> TokenPair:
     client_host = request.client.host if request.client else "unknown"
     attempt_key = f"{client_host}:{payload.username.strip().casefold()}"
-    return service.login(payload, attempt_key)
+    return service.login(payload, attempt_key, client_host)
 
 
 @router.post("/refresh", response_model=TokenPair)
@@ -62,13 +69,56 @@ def refresh(payload: RefreshRequest, service: AuthServiceDependency) -> TokenPai
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(payload: RefreshRequest, service: AuthServiceDependency) -> None:
-    service.logout(payload.refresh_token)
+def logout(payload: RefreshRequest, request: Request, service: AuthServiceDependency) -> None:
+    client_host = request.client.host if request.client else "unknown"
+    service.logout(payload.refresh_token, client_host)
 
 
 @router.get("/me", response_model=UserRead)
 def me(principal: Annotated[Principal, Security(get_principal)]) -> User:
     return principal.user
+
+
+@router.patch("/me", response_model=UserRead)
+def update_me(
+    payload: UserProfileUpdate,
+    principal: Annotated[Principal, Security(get_principal)],
+    service: AuthServiceDependency,
+) -> User:
+    return service.update_profile(principal.user, payload.name)
+
+
+@router.patch("/users/{user_id}/role", response_model=UserRead)
+def update_user_role(
+    user_id: str,
+    payload: UserRoleUpdate,
+    principal: Annotated[Principal, Security(get_principal)],
+    service: AuthServiceDependency,
+) -> User:
+    if principal.user.role != UserRole.administrator:
+        raise AuthorizationError("Administrator role is required")
+    return service.update_role(user_id, payload.role)
+
+
+@router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: UserCreate,
+    principal: Annotated[Principal, Security(get_principal)],
+    service: AuthServiceDependency,
+) -> User:
+    if principal.user.role != UserRole.administrator:
+        raise AuthorizationError("Administrator role is required")
+    return service.create_user(payload)
+
+
+@router.get("/access-log", response_model=list[UserAccessLogRead])
+def access_log(
+    principal: Annotated[Principal, Security(get_principal)],
+    service: AuthServiceDependency,
+) -> list[UserAccessLog]:
+    if principal.user.role != UserRole.administrator:
+        raise AuthorizationError("Administrator role is required")
+    return service.list_access_logs()
 
 
 @router.get("/tokens", response_model=list[ApiTokenRead])

@@ -42,6 +42,12 @@ class TokenKind(str, enum.Enum):
     api = "api"
 
 
+class UserRole(str, enum.Enum):
+    administrator = "administrator"
+    supervisor = "supervisor"
+    worker = "worker"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -58,8 +64,24 @@ class User(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     username: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), default="")
     password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, native_enum=False), default=UserRole.administrator, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    access_logs: Mapped[list["UserAccessLog"]] = relationship(back_populates="user")
+
+
+class UserAccessLog(Base):
+    __tablename__ = "user_access_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(16), index=True)
+    client_host: Mapped[str] = mapped_column(String(255), default="unknown")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    user: Mapped[User] = relationship(back_populates="access_logs")
 
 
 class AuthToken(TimestampMixin, Base):

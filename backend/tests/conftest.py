@@ -50,7 +50,7 @@ def client() -> Generator[TestClient, None, None]:
 def auth_headers(client: TestClient) -> dict[str, str]:
     response = client.post(
         "/api/v1/auth/setup",
-        json={"username": "owner", "password": "correct horse battery staple"},
+        json={"username": "owner", "name": "Owner", "password": "correct horse battery staple"},
     )
     assert response.status_code == 201, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}

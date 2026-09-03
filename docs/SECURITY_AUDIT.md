@@ -5,8 +5,8 @@
 ## Область проверки
 
 Проверены FastAPI API, SQLAlchemy-модели и миграции, файловое хранилище заметок,
-Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиент, Docker/Caddy и CI.
-Запускались backend-тесты, Ruff, `npm audit` для обоих клиентов и `pip-audit`.
+Telegram worker/webhook, MCP bridge, React web-клиент, Docker/Caddy и CI.
+Запускались backend-тесты, Ruff, `npm audit` для web-клиента и `pip-audit`.
 
 Это ревью исходного кода и зависимостей, а не внешний pentest работающего production-стенда.
 
@@ -15,7 +15,7 @@ Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиен
 - Старые access JWT не содержат новые обязательные claims и потребуют refresh или повторный вход.
 - Production теперь не запускается без явных JWT/setup/encryption secrets, HTTPS public URL и
   списка trusted hosts. Это намеренный fail-closed.
-- Удалённый backend по HTTP больше не принимается desktop/MCP-клиентами; HTTP оставлен только для
+- Удалённый backend по HTTP больше не принимается web/MCP-клиентами; HTTP оставлен только для
   `localhost`, `127.0.0.1` и `::1`.
 - Миграция БД для этих изменений не требуется. Новый `Cargo.lock` следует хранить в Git.
 
@@ -35,9 +35,7 @@ Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиен
   выполняется одним условным SQL UPDATE и является атомарной.
 - `cryptography 45.0.7` попадал под известные security advisories, а прежнее ограничение `<46`
   запрещало установить исправление. Диапазон поднят до `48.0.1+`, CI запускает `pip-audit`.
-- У актуального Tauri-клиента CSP был отключён. Добавлена CSP, удалён неиспользуемый opener plugin
-  и его разрешение.
-- Desktop/MCP-клиенты могли отправить bearer-токен на удалённый HTTP-сервер. Незашифрованный HTTP
+- Web/MCP-клиенты могли отправить bearer-токен на удалённый HTTP-сервер. Незашифрованный HTTP
   теперь разрешён только для loopback-адресов.
 
 ### Средний риск
@@ -54,7 +52,7 @@ Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиен
 - Добавлены Trusted Host, защитные HTTP-заголовки, ограничения длины поисковых запросов, ID,
   путей, тегов и общего размера request body. Ошибки уникальности теперь возвращают
   контролируемые 409 вместо 500.
-- CI переключён с устаревшего `desktop/` на клиент из `frontend/task manager/`.
+- CI собирает web-клиент из `frontend/task manager/`.
 
 ## Оставшиеся риски
 
@@ -64,9 +62,7 @@ Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиен
   являются общей атомарной транзакцией: авария между операциями может оставить orphan-файл или
   рассинхронизировать индекс. Нужен журнал файловых операций с recovery/reconciliation job либо
   единое object storage/DB-хранилище с outbox.
-- Refresh- и access-токены web/Tauri-клиента сохраняются в `localStorage`. CSP уменьшает вероятность
-  XSS, но при XSS токены всё равно доступны JavaScript. Для Tauri refresh-токен следует перенести
-  в OS credential store/Stronghold, access-токен держать только в памяти.
+- Refresh- и access-токены web-клиента сохраняются в `localStorage`; при XSS токены доступны JavaScript.
 - Модель данных пока является single-workspace: проекты, задачи и заметки не имеют `workspace_id`
   и membership ACL. До добавления нескольких пользователей нужны Workspace, Membership, роли и
   обязательные tenant-фильтры во всех репозиториях.
@@ -87,7 +83,7 @@ Telegram worker/webhook, MCP bridge, актуальный React/Tauri-клиен
 
 ## Результат сканирования зависимостей
 
-- `npm audit`: 0 известных уязвимостей в актуальном и legacy desktop lock-файлах.
+- `npm audit`: результат зависит от текущего lock-файла web-клиента.
 - До исправления `pip-audit`: проблемы в `cryptography 45.0.7`, `pip 25.0.1`,
   `pytest 8.4.2`.
 - После обновления: 0 известных уязвимостей; локальные пакеты `taskman-api` и `taskman-mcp`

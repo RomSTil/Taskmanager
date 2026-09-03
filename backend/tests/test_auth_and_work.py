@@ -6,12 +6,12 @@ from fastapi.testclient import TestClient
 def test_setup_is_single_use_and_login_works(client: TestClient) -> None:
     assert client.get("/api/v1/auth/setup").json() == {"setup_required": True}
     created = client.post(
-        "/api/v1/auth/setup", json={"username": "owner", "password": "a-strong-password"}
+        "/api/v1/auth/setup", json={"username": "owner", "name": "Света", "password": "a-strong-password"}
     )
     assert created.status_code == 201
     assert client.get("/api/v1/auth/setup").json() == {"setup_required": False}
     assert client.post(
-        "/api/v1/auth/setup", json={"username": "other", "password": "another-strong-password"}
+        "/api/v1/auth/setup", json={"username": "other", "name": "Other", "password": "another-strong-password"}
     ).status_code == 409
     login = client.post(
         "/api/v1/auth/login", json={"username": "owner", "password": "a-strong-password"}
@@ -91,6 +91,8 @@ def test_workspace_bootstrap_returns_initial_client_state(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["user"]["username"] == "owner"
+    assert payload["user"]["name"] == "Owner"
+    assert payload["user"]["role"] == "administrator"
     assert [user["username"] for user in payload["users"]] == ["owner"]
     assert [project["key"] for project in payload["projects"]] == ["HOME"]
     assert payload["tasks"] == []
@@ -104,6 +106,72 @@ def test_workspace_bootstrap_returns_initial_client_state(
         "overdue": 0,
     }
     assert payload["server_time"]
+
+
+def test_profile_name_and_administrator_role_guard(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    bootstrap = client.get("/api/v1/bootstrap", headers=auth_headers).json()
+    user_id = bootstrap["user"]["id"]
+
+    updated = client.patch("/api/v1/auth/me", headers=auth_headers, json={"name": "Света"})
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Света"
+
+    demotion = client.patch(
+        f"/api/v1/auth/users/{user_id}/role",
+        headers=auth_headers,
+        json={"role": "worker"},
+    )
+    assert demotion.status_code == 422
+    assert "administrator" in demotion.json()["detail"].lower()
+
+
+def test_administrator_can_create_a_user_with_role(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    response = client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={
+            "name": "Света",
+            "username": "sveta",
+            "password": "aB7dE9kL",
+            "role": "supervisor",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["name"] == "Света"
+    assert response.json()["username"] == "sveta"
+    assert response.json()["role"] == "supervisor"
+    duplicate = client.post(
+        "/api/v1/auth/users",
+        headers=auth_headers,
+        json={"name": "Света 2", "username": "sveta", "password": "aB7dE9kL"},
+    )
+    assert duplicate.status_code == 409
+
+
+def test_administrator_can_review_login_and_logout_history(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "owner", "password": "correct horse battery staple"},
+    )
+    assert login.status_code == 200
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={"refresh_token": login.json()["refresh_token"]},
+    )
+    assert logout.status_code == 204
+
+    access_log = client.get("/api/v1/auth/access-log", headers=auth_headers)
+    assert access_log.status_code == 200
+    actions = [entry["action"] for entry in access_log.json()]
+    assert "login" in actions
+    assert "logout" in actions
 
 
 def test_task_creator_and_assignee_are_recorded(

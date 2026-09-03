@@ -9,11 +9,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_session
-from .models import AuthToken, TokenKind, User
+from .models import AuthToken, TokenKind, User, UserRole
 from .security import decode_access_token, hash_token
 
 
 bearer = HTTPBearer(auto_error=False)
+
+ROLE_SCOPES: dict[UserRole, set[str]] = {
+    UserRole.administrator: {"*"},
+    UserRole.supervisor: {
+        "projects:read", "projects:write", "tasks:read", "tasks:write", "notes:read", "notes:write"
+    },
+    UserRole.worker: {"projects:read", "tasks:read", "tasks:write", "notes:read", "notes:write"},
+}
 
 
 def _is_expired(value: datetime | None) -> bool:
@@ -66,7 +74,11 @@ def get_principal(
     user = session.get(User, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Inactive owner account")
-    return Principal(user=user, scopes={"*"})
+    granted_scopes = ROLE_SCOPES[user.role]
+    missing = set(security_scopes.scopes) - granted_scopes
+    if missing and "*" not in granted_scopes:
+        raise HTTPException(status_code=403, detail=f"Missing scopes: {', '.join(sorted(missing))}")
+    return Principal(user=user, scopes=granted_scopes)
 
 
 CurrentPrincipal = Annotated[Principal, Security(get_principal)]

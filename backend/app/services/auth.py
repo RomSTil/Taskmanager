@@ -4,7 +4,7 @@ from threading import Lock
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..config import Settings
 from ..core.errors import (
@@ -15,8 +15,8 @@ from ..core.errors import (
     RateLimitError,
     ValidationError,
 )
-from ..models import AuthToken, Project, TokenKind, User
-from ..schemas import ApiTokenCreate, LoginRequest, SetupRequest, TokenPair, UserRead
+from ..models import AuthToken, Project, TokenKind, User, UserAccessLog, UserRole
+from ..schemas import ApiTokenCreate, LoginRequest, SetupRequest, TokenPair, UserCreate, UserRead
 from ..security import (
     API_TOKEN_SCOPES,
     constant_time_equal,
@@ -96,7 +96,7 @@ class AuthService:
     def setup_required(self) -> bool:
         return (self.session.scalar(select(func.count(User.id))) or 0) == 0
 
-    def setup(self, payload: SetupRequest, supplied_token: str | None) -> TokenPair:
+    def setup(self, payload: SetupRequest, supplied_token: str | None, client_host: str) -> TokenPair:
         if not self.setup_required():
             raise ConflictError("Owner account already exists")
         if self.settings.setup_token and (
@@ -104,8 +104,14 @@ class AuthService:
         ):
             raise AuthorizationError("Invalid setup token")
 
-        user = User(username=payload.username.strip(), password_hash=hash_password(payload.password))
+        user = User(
+            username=payload.username.strip(),
+            name=payload.name.strip(),
+            password_hash=hash_password(payload.password),
+            role=UserRole.administrator,
+        )
         self.session.add(user)
+        self.session.add(UserAccessLog(user=user, action="login", client_host=client_host))
         self.session.add(
             Project(
                 name="Личное пространство",
@@ -124,7 +130,7 @@ class AuthService:
         self.session.refresh(user)
         return pair
 
-    def login(self, payload: LoginRequest, attempt_key: str) -> TokenPair:
+    def login(self, payload: LoginRequest, attempt_key: str, client_host: str) -> TokenPair:
         self.rate_limiter.check(attempt_key)
         user = self.session.scalar(select(User).where(User.username == payload.username.strip()))
         password_hash = user.password_hash if user else self._dummy_password_hash
@@ -133,6 +139,7 @@ class AuthService:
             self.rate_limiter.failed(attempt_key)
             raise AuthenticationError("Invalid username or password")
         self.rate_limiter.succeeded(attempt_key)
+        self.session.add(UserAccessLog(user_id=user.id, action="login", client_host=client_host))
         pair = self._issue_pair(user)
         self.session.commit()
         return pair
@@ -161,17 +168,29 @@ class AuthService:
         self.session.commit()
         return pair
 
-    def logout(self, raw_token: str) -> None:
-        self.session.execute(
-            update(AuthToken)
+    def logout(self, raw_token: str, client_host: str) -> None:
+        token = self.session.scalar(
+            select(AuthToken)
             .where(
                 AuthToken.kind == TokenKind.refresh,
                 AuthToken.token_hash == hash_token(raw_token),
                 AuthToken.revoked_at.is_(None),
             )
-            .values(revoked_at=datetime.now(UTC))
         )
+        if token:
+            token.revoked_at = datetime.now(UTC)
+            self.session.add(UserAccessLog(user_id=token.user_id, action="logout", client_host=client_host))
         self.session.commit()
+
+    def list_access_logs(self, limit: int = 100) -> list[UserAccessLog]:
+        return list(
+            self.session.scalars(
+                select(UserAccessLog)
+                .options(joinedload(UserAccessLog.user))
+                .order_by(UserAccessLog.created_at.desc())
+                .limit(limit)
+            )
+        )
 
     def list_api_tokens(self, user_id: str) -> list[AuthToken]:
         return list(
@@ -215,13 +234,52 @@ class AuthService:
         token.revoked_at = datetime.now(UTC)
         self.session.commit()
 
+    def update_profile(self, user: User, name: str) -> User:
+        user.name = name.strip()
+        self.session.commit()
+        self.session.refresh(user)
+        return user
+
+    def update_role(self, user_id: str, role: UserRole) -> User:
+        user = self.session.get(User, user_id)
+        if not user or not user.is_active:
+            raise NotFoundError("User not found")
+        if user.role == UserRole.administrator and role != UserRole.administrator:
+            administrators = self.session.scalar(
+                select(func.count(User.id)).where(
+                    User.is_active.is_(True), User.role == UserRole.administrator
+                )
+            ) or 0
+            if administrators <= 1:
+                raise ValidationError("At least one administrator is required")
+        user.role = role
+        self.session.commit()
+        self.session.refresh(user)
+        return user
+
+    def create_user(self, payload: UserCreate) -> User:
+        user = User(
+            name=payload.name.strip(),
+            username=payload.username.strip(),
+            password_hash=hash_password(payload.password),
+            role=payload.role,
+        )
+        self.session.add(user)
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise ConflictError("Username already exists") from exc
+        self.session.refresh(user)
+        return user
+
     def _issue_pair(self, user: User) -> TokenPair:
         access, expires_at = create_access_token(user.id)
         refresh = new_refresh_token()
         self.session.add(
             AuthToken(
                 user_id=user.id,
-                name="desktop session",
+                name="web session",
                 kind=TokenKind.refresh,
                 token_hash=hash_token(refresh),
                 scopes=["*"],

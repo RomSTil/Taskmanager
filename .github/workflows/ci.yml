@@ -20,8 +20,8 @@ jobs:
       - run: pytest backend/tests mcp-bridge/tests --cov=backend/app --cov-report=term-missing
       - run: pip-audit --progress-spinner off --vulnerability-service osv
 
-  desktop:
-    runs-on: windows-latest
+  web:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,15 +29,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/task manager/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: frontend/task manager/src-tauri
       - working-directory: frontend/task manager
         run: npm ci
       - working-directory: frontend/task manager
         run: npm test
       - working-directory: frontend/task manager
         run: npm run build
-      - working-directory: frontend/task manager/src-tauri
-        run: cargo check

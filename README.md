@@ -1,6 +1,6 @@
 # Taskman
 
-Taskman — локальный task manager для проектов, задач, заметок и дедлайнов. Desktop-клиент построен на Tauri и React, backend — на FastAPI.
+Taskman — web task manager для проектов, задач, заметок и дедлайнов. Frontend построен на React, backend — на FastAPI.
 
 ## Возможности
 
@@ -17,8 +17,7 @@ Taskman — локальный task manager для проектов, задач,
 
 ```text
 backend/                 FastAPI API, модели, миграции и тесты
-frontend/task manager/   актуальный React + Tauri интерфейс
-desktop/                 предыдущий desktop-клиент
+frontend/task manager/   React web-интерфейс
 mcp-bridge/              MCP bridge для Codex
 infra/                   Caddy и backup-скрипты
 scripts/                 скрипты разработки
@@ -26,7 +25,7 @@ scripts/                 скрипты разработки
 
 ## Требования
 
-Python 3.12+, Node.js 20+, Rust stable и WebView2 для сборки Tauri.
+Python 3.12+ и Node.js 20+.
 
 ## Быстрый запуск
 
@@ -48,7 +47,7 @@ npm install
 npm run dev
 ```
 
-Откройте `http://127.0.0.1:1420` и укажите backend `http://127.0.0.1:8765`. Для desktop-режима используйте `npm run tauri dev`.
+Откройте `http://127.0.0.1:1420` и укажите backend `http://127.0.0.1:8765`.
 
 ## Тесты и сборка
 

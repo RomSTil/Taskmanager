@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ApiError, clearSession, getSavedApiUrl, getSession, TaskmanApi } from "./api";
 import IntegrationsView from "./IntegrationsView";
+import SettingsView from "./SettingsView";
 import type {
   Dashboard,
   KnowledgeGraph,
@@ -36,14 +37,14 @@ import type {
 import "./App.css";
 
 type Phase = "checking" | "auth" | "workspace";
-type ActiveView = "overview" | "tasks" | "notes" | "graph" | "integrations" | `project:${string}`;
+type ActiveView = "overview" | "tasks" | "notes" | "graph" | "integrations" | "settings" | `project:${string}`;
 
 const ACTIVE_VIEW_KEY = "taskman.active-view";
 
 function readActiveView(): ActiveView {
   try {
     const saved = localStorage.getItem(ACTIVE_VIEW_KEY);
-    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved === "integrations" || saved?.startsWith("project:")) {
+    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved === "integrations" || saved === "settings" || saved?.startsWith("project:")) {
       return saved as ActiveView;
     }
   } catch {
@@ -479,9 +480,9 @@ function PublicNotePage({ token }: { token: string }) {
 
 function WorkspaceApp() {
   const [phase, setPhase] = useState<Phase>("checking");
-  const [apiUrl, setApiUrl] = useState(getSavedApiUrl);
   const [setupRequired, setSetupRequired] = useState(false);
   const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [workspace, setWorkspace] = useState<WorkspaceBootstrap | null>(null);
@@ -537,14 +538,13 @@ function WorkspaceApp() {
   const [overviewProjectFilter, setOverviewProjectFilter] = useState("all");
   const [overviewOrder, setOverviewOrder] = useState<string[]>(readOverviewOrder);
 
-  const api = useMemo(() => new TaskmanApi(apiUrl), [apiUrl]);
+  const api = useMemo(() => new TaskmanApi(getSavedApiUrl()), []);
   void selectGraphNode;
 
   const connect = useCallback(async () => {
     setBusy(true);
     setError("");
     try {
-      api.saveUrl();
       const setup = await api.setupState();
       setSetupRequired(setup.setup_required);
       if (!setup.setup_required && getSession()) {
@@ -569,6 +569,20 @@ function WorkspaceApp() {
   useEffect(() => {
     void connect();
   }, [connect]);
+
+  useEffect(() => {
+    if (phase !== "workspace") return;
+    const session = getSession();
+    if (!session) return;
+    const expiresAt = Date.parse(session.expires_at);
+    const delay = Number.isFinite(expiresAt)
+      ? Math.max(1_000, expiresAt - Date.now() - 60_000)
+      : 86_340_000;
+    const timer = window.setTimeout(() => {
+      void api.refreshSession().then(() => refreshWorkspace()).catch(logout);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [api, phase]);
 
   useEffect(() => {
     try {
@@ -625,7 +639,7 @@ function WorkspaceApp() {
     setBusy(true);
     setError("");
     try {
-      if (setupRequired) await api.setup(username, password, setupToken || undefined);
+      if (setupRequired) await api.setup(username, name, password, setupToken || undefined);
       else await api.login(username, password);
       await refreshWorkspace();
       setPassword("");
@@ -638,7 +652,7 @@ function WorkspaceApp() {
   }
 
   function logout() {
-    clearSession();
+    void api.logoutSession();
     setWorkspace(null);
     setSelectedTask(null);
     setSelectedNote(null);
@@ -1065,16 +1079,13 @@ function WorkspaceApp() {
               <h2>{setupRequired ? "Создать владельца" : "Войти в пространство"}</h2>
             </div>
             <label>
-              Адрес backend
-              <div className="server-field">
-                <input type="url" value={apiUrl} onChange={(event) => setApiUrl(event.currentTarget.value)} required />
-                <button className="secondary-button" type="button" onClick={() => void connect()}>Проверить</button>
-              </div>
-            </label>
-            <label>
               Имя пользователя
               <input autoComplete="username" value={username} onChange={(event) => setUsername(event.currentTarget.value)} minLength={3} required />
             </label>
+            {setupRequired && <label>
+              Ваше имя
+              <input autoComplete="name" value={name} onChange={(event) => setName(event.currentTarget.value)} minLength={1} maxLength={120} placeholder="Например, Света" required />
+            </label>}
             <label>
               Пароль
               <input type="password" autoComplete={setupRequired ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.currentTarget.value)} minLength={setupRequired ? 10 : undefined} required />
@@ -1120,8 +1131,8 @@ function WorkspaceApp() {
     .filter(
       (task) => overviewProjectFilter === "all" || task.project_id === overviewProjectFilter,
     );
-  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : activeView === "integrations" ? "Интеграции" : `Доброе утро, ${workspace.user.username}`);
-  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "integrations" ? "ЯНДЕКС ДИРЕКТ · MAX" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
+  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : activeView === "integrations" ? "Интеграции" : activeView === "settings" ? "Настройки" : `Доброе утро, ${workspace.user.name || workspace.user.username}`);
+  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "integrations" ? "ЯНДЕКС ДИРЕКТ · MAX" : activeView === "settings" ? "ПРОФИЛЬ И ДОСТУП" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
 
   return (
     <main className="workspace-layout">
@@ -1157,6 +1168,7 @@ function WorkspaceApp() {
           <button className="new-workspace-button" type="button" onClick={() => openWorkspaceCreator()}>＋ Новое пространство</button>
         </nav>
         <button className={`nav-item ${activeView === "integrations" ? "active" : ""}`} type="button" onClick={() => setActiveView("integrations")}><span>↗</span> Интеграции</button>
+        <button className={`nav-item ${activeView === "settings" ? "active" : ""}`} type="button" onClick={() => setActiveView("settings")}><span>⚙</span> Настройки</button>
         <div className="sidebar-footer">
           <div><strong>{workspace.user.username}</strong><span>{api.baseUrl}</span></div>
           <button className="icon-button" type="button" onClick={logout} title="Выйти">↪</button>
@@ -1240,6 +1252,7 @@ function WorkspaceApp() {
         )}
 
         {activeView === "integrations" && <IntegrationsView api={api} />}
+        {activeView === "settings" && <SettingsView api={api} user={workspace.user} users={workspace.users} onChanged={async () => { await refreshWorkspace(); }} />}
 
         {activeView === "graph" && (
           <section className="task-section standalone">

@@ -1,7 +1,12 @@
-# Tauri + React + Typescript
+# Taskman Web
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Web-интерфейс Taskman на React, TypeScript и Vite.
 
-## Recommended IDE Setup
+## Запуск
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```powershell
+npm install
+npm run dev
+```
+
+Backend по умолчанию доступен на `http://127.0.0.1:8765`.

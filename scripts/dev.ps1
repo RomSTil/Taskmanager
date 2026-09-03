@@ -11,7 +11,7 @@ Start-Process -WindowStyle Hidden -FilePath "$projectRoot\.venv\Scripts\python.e
 Push-Location "$projectRoot\frontend\task manager"
 try {
     npm.cmd install
-    npm.cmd run tauri dev
+    npm.cmd run dev -- --host 127.0.0.1
 } finally {
     Pop-Location
 }

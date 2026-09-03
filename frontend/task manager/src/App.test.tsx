@@ -8,12 +8,16 @@ const workspace: WorkspaceBootstrap = {
   user: {
     id: "user-1",
     username: "owner",
+    name: "Света",
+    role: "administrator",
     created_at: "2026-07-19T08:00:00Z",
   },
   users: [
     {
       id: "user-1",
       username: "owner",
+      name: "Света",
+      role: "administrator",
       created_at: "2026-07-19T08:00:00Z",
     },
   ],
@@ -145,7 +149,7 @@ describe("workspace navigation", () => {
 
   it("opens every primary clickable workspace surface", async () => {
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Доброе утро, owner" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Доброе утро, Света" })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: /Мои задачи/ }));
     expect(screen.getByRole("heading", { name: "Мои задачи" })).toBeVisible();
@@ -175,7 +179,7 @@ describe("workspace navigation", () => {
 
   it("renders the priority board, filters projects, and switches to the timeline", async () => {
     const { container } = render(<App />);
-    expect(await screen.findByRole("heading", { name: "Доброе утро, owner" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Доброе утро, Света" })).toBeVisible();
 
     const board = container.querySelector(".priority-board");
     expect(board).not.toBeNull();

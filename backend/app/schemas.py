@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from .models import TaskStatus
+from .models import TaskStatus, UserRole
 
 
 def validate_entity_id(value: str) -> str:
@@ -38,6 +38,7 @@ class SetupState(ApiModel):
 
 class SetupRequest(ApiModel):
     username: str = Field(min_length=3, max_length=120)
+    name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=10, max_length=256)
 
 
@@ -53,7 +54,32 @@ class RefreshRequest(ApiModel):
 class UserRead(ApiModel):
     id: str
     username: str
+    name: str
+    role: UserRole
     created_at: datetime
+
+
+class UserProfileUpdate(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class UserRoleUpdate(ApiModel):
+    role: UserRole
+
+
+class UserCreate(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    username: str = Field(min_length=3, max_length=120, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=8, max_length=256)
+    role: UserRole = UserRole.worker
+
+
+class UserAccessLogRead(ApiModel):
+    id: str
+    action: Literal["login", "logout"]
+    client_host: str
+    created_at: datetime
+    user: UserRead
 
 
 class TokenPair(ApiModel):

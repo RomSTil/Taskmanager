@@ -9,6 +9,11 @@ import type {
   Task,
   TaskStatus,
   TokenPair,
+  User,
+  UserAccessLog,
+  ApiToken,
+  CreatedApiToken,
+  UserRole,
   WorkspaceBootstrap,
   DirectAccount,
   DirectJob,
@@ -100,8 +105,13 @@ export function clearSession(): void {
   localStorage.removeItem(SESSION_KEY);
 }
 
+function saveSession(session: TokenPair): void {
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
 export class TaskmanApi {
   readonly baseUrl: string;
+  private refreshInFlight: Promise<TokenPair> | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = normalizeUrl(baseUrl);
@@ -111,7 +121,7 @@ export class TaskmanApi {
     localStorage.setItem(API_URL_KEY, validateBackendUrl(this.baseUrl));
   }
 
-  private async request<T>(path: string, init: RequestInit = {}, authenticated = false): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, authenticated = false, retried = false): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
     if (init.body) headers.set("Content-Type", "application/json");
@@ -130,6 +140,10 @@ export class TaskmanApi {
       throw new ApiError("Сервер недоступен. Проверьте адрес и запустите backend.", 0);
     }
 
+    if (response.status === 401 && authenticated && !retried) {
+      await this.refreshSession();
+      return this.request<T>(path, init, authenticated, true);
+    }
     const payload = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       throw new ApiError(readError(payload, `Ошибка сервера (${response.status})`), response.status);
@@ -143,15 +157,16 @@ export class TaskmanApi {
 
   async setup(
     username: string,
+    name: string,
     password: string,
     setupToken?: string,
   ): Promise<TokenPair> {
     const session = await this.request<TokenPair>("/auth/setup", {
       method: "POST",
       headers: setupToken ? { "X-Setup-Token": setupToken } : undefined,
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, name, password }),
     });
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    saveSession(session);
     return session;
   }
 
@@ -160,8 +175,34 @@ export class TaskmanApi {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    saveSession(session);
     return session;
+  }
+
+  async refreshSession(): Promise<TokenPair> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const current = getSession();
+    if (!current) throw new ApiError("Требуется вход", 401);
+    this.refreshInFlight = (async () => {
+      try {
+        const response = await fetch(`${validateBackendUrl(this.baseUrl)}/api/v1/auth/refresh`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: current.refresh_token }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new ApiError(readError(payload, "Не удалось обновить сессию"), response.status);
+        const session = payload as TokenPair;
+        saveSession(session);
+        return session;
+      } catch (reason) {
+        clearSession();
+        throw reason instanceof ApiError ? reason : new ApiError("Не удалось обновить сессию", 0);
+      } finally {
+        this.refreshInFlight = null;
+      }
+    })();
+    return this.refreshInFlight;
   }
 
   bootstrap(): Promise<WorkspaceBootstrap> {
@@ -273,6 +314,44 @@ export class TaskmanApi {
 
   knowledgeGraph(): Promise<KnowledgeGraph> {
     return this.request<KnowledgeGraph>("/knowledge-graph", {}, true);
+  }
+
+  updateMyProfile(name: string): Promise<User> {
+    return this.request<User>("/auth/me", { method: "PATCH", body: JSON.stringify({ name }) }, true);
+  }
+
+  updateUserRole(userId: string, role: UserRole): Promise<User> {
+    return this.request<User>(`/auth/users/${encodeURIComponent(userId)}/role`, { method: "PATCH", body: JSON.stringify({ role }) }, true);
+  }
+
+  createUser(input: { name: string; username: string; password: string; role: UserRole }): Promise<User> {
+    return this.request<User>("/auth/users", { method: "POST", body: JSON.stringify(input) }, true);
+  }
+
+  listAccessLog(): Promise<UserAccessLog[]> {
+    return this.request<UserAccessLog[]>("/auth/access-log", {}, true);
+  }
+
+  async logoutSession(): Promise<void> {
+    const session = getSession();
+    if (!session) return;
+    try {
+      await this.request<void>("/auth/logout", { method: "POST", body: JSON.stringify({ refresh_token: session.refresh_token }) });
+    } finally {
+      clearSession();
+    }
+  }
+
+  listApiTokens(): Promise<ApiToken[]> {
+    return this.request<ApiToken[]>("/auth/tokens", {}, true);
+  }
+
+  createApiToken(input: { name: string; scopes: string[] }): Promise<CreatedApiToken> {
+    return this.request<CreatedApiToken>("/auth/tokens", { method: "POST", body: JSON.stringify(input) }, true);
+  }
+
+  revokeApiToken(tokenId: string): Promise<void> {
+    return this.request<void>(`/auth/tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" }, true);
   }
 
   listDirectAccounts(): Promise<DirectAccount[]> {

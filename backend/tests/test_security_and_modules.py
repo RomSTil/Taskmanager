@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import APIRouter
@@ -16,7 +13,7 @@ from app.services.auth import LoginRateLimiter
 def test_refresh_token_cannot_be_replayed(client: TestClient) -> None:
     created = client.post(
         "/api/v1/auth/setup",
-        json={"username": "owner", "password": "a-strong-password"},
+        json={"username": "owner", "name": "Owner", "password": "a-strong-password"},
     )
     refresh_token = created.json()["refresh_token"]
 
@@ -91,18 +88,3 @@ def test_module_registry_rejects_cycles_and_installs_custom_router() -> None:
     with TestClient(app) as custom_client:
         assert custom_client.get("/api/v1/example").json() == {"ok": True}
 
-
-def test_current_tauri_client_has_a_csp() -> None:
-    config_path = (
-        Path(__file__).parents[2]
-        / "frontend"
-        / "task manager"
-        / "src-tauri"
-        / "tauri.conf.json"
-    )
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-
-    csp = config["app"]["security"]["csp"]
-    assert csp
-    assert "script-src 'self'" in csp
-    assert "object-src 'none'" in csp

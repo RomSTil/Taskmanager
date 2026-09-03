@@ -1,4 +1,5 @@
 export type TaskStatus = "inbox" | "todo" | "in_progress" | "blocked" | "done";
+export type UserRole = "administrator" | "supervisor" | "worker";
 
 export interface SetupState {
   setup_required: boolean;
@@ -7,6 +8,8 @@ export interface SetupState {
 export interface User {
   id: string;
   username: string;
+  name: string;
+  role: UserRole;
   created_at: string;
 }
 
@@ -154,6 +157,28 @@ export interface KnowledgeGraphEdge {
 export interface KnowledgeGraph {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
+}
+
+export interface UserAccessLog {
+  id: string;
+  action: "login" | "logout";
+  client_host: string;
+  created_at: string;
+  user: User;
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedApiToken extends ApiToken {
+  token: string;
 }
 
 export interface DirectAccount {
