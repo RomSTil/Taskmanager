@@ -1,15 +1,15 @@
 """Add user display names and roles.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0012
+Revises: 0011
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0006"
-down_revision = "0005"
+revision = "0012"
+down_revision = "0011"
 branch_labels = None
 depends_on = None
 

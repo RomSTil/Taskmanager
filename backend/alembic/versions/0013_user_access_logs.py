@@ -1,15 +1,15 @@
 """Add user access log.
 
-Revision ID: 0007
-Revises: 0006
+Revision ID: 0013
+Revises: 0012
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0007"
-down_revision = "0006"
+revision = "0013"
+down_revision = "0012"
 branch_labels = None
 depends_on = None
 
