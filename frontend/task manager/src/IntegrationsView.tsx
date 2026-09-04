@@ -6,7 +6,7 @@ type IntegrationsViewProps = { api: TaskmanApi };
 
 const emptyMarketForm = { name: "", campaign_id: "", api_key: "", poll_interval_seconds: "60" };
 const emptyDirectForm = { name: "", token: "", client_login: "", balance_threshold: "5000", days_left_threshold: "3", anomaly_ratio: "2", monitor_interval_minutes: "30" };
-const emptyMaxForm = { name: "", token: "", integration: "market" as "market" | "direct", allowlist: "" };
+const emptyMaxForm = { name: "", token: "", integration: "market" as "market" | "direct" | "operations", allowlist: "" };
 const emptyOzonForm = {
   name: "",
   client_id: "",
@@ -65,10 +65,16 @@ function DirectAccountCard({ account, refreshing, deleting, onRefresh, onDelete 
   </article>;
 }
 
+function maxIntegrationLabel(value: MaxBot["integration"]): string {
+  if (value === "market") return "Заказы маркетплейсов";
+  if (value === "operations") return "Работа Codex";
+  return "Аналитика Директа";
+}
+
 function MaxBotCard({ bot, deleting, onRegister, onDelete }: { bot: MaxBot; deleting: boolean; onRegister: (bot: MaxBot) => void; onDelete: (bot: MaxBot) => void }) {
   return <article className="integration-card">
     <div className="integration-card-heading"><div><span className="integration-icon max-icon">M</span><div><strong>{bot.name}</strong><small>Токен: {bot.token_hint}</small></div></div><span className={`integration-status ${bot.enabled ? "online" : "offline"}`}>{bot.enabled ? "Активен" : "Выключен"}</span></div>
-    <div className="integration-details integration-details-stack"><span>Назначение <strong>{bot.integration === "market" ? "Заказы маркетплейсов" : "Аналитика Директа"}</strong></span><span>Webhook <code>{bot.webhook_url}</code></span><span>Получатель <strong>{bot.target_id ? `${bot.target_type}: ${bot.target_id}` : "определится после /start"}</strong></span><span>Доступ <strong>{bot.allowlist.length ? `${bot.allowlist.length} пользователей` : "заявки через /start"}</strong></span></div>
+    <div className="integration-details integration-details-stack"><span>Назначение <strong>{maxIntegrationLabel(bot.integration)}</strong></span><span>Webhook <code>{bot.webhook_url}</code></span><span>Получатель <strong>{bot.target_id ? `${bot.target_type}: ${bot.target_id}` : "определится после /start"}</strong></span><span>Доступ <strong>{bot.allowlist.length ? `${bot.allowlist.length} пользователей` : "заявки через /start"}</strong></span></div>
     {bot.last_error && <p className="integration-error">Последняя ошибка: {bot.last_error}</p>}
     <div className="integration-card-actions"><button className="secondary-button integration-action" type="button" onClick={() => onRegister(bot)} disabled={deleting}>Перерегистрировать webhook</button><button className="danger-button integration-action" type="button" onClick={() => onDelete(bot)} disabled={deleting}>{deleting ? "Удаляем…" : "Удалить бота"}</button></div>
   </article>;
@@ -274,6 +280,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
 
   const marketBots = bots.filter((bot) => bot.integration === "market");
   const directBots = bots.filter((bot) => bot.integration === "direct");
+  const operationBots = bots.filter((bot) => bot.integration === "operations");
   const waitingOrders = orders.filter((order) => order.pack_state === "new").length;
   const packedOrders = orders.filter((order) => order.pack_state === "packed").length;
   const pendingRequests = accessRequests.filter((request) => request.status === "pending").length;
@@ -304,7 +311,7 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
         <div className="section-heading"><div><p className="eyebrow">TRANSPORT</p><h3>Бот в MAX</h3></div></div>
         <form className="integration-form" onSubmit={submitMax}>
           <label>Название бота<input value={maxForm.name} onChange={(event) => setMaxForm({ ...maxForm, name: event.currentTarget.value })} placeholder="Сборка заказов" required /></label>
-          <label>Назначение<select value={maxForm.integration} onChange={(event) => setMaxForm({ ...maxForm, integration: event.currentTarget.value as "market" | "direct" })}><option value="market">Яндекс Маркет — сборка заказов</option><option value="direct">Яндекс Директ — аналитика</option></select></label>
+          <label>Назначение<select value={maxForm.integration} onChange={(event) => setMaxForm({ ...maxForm, integration: event.currentTarget.value as "market" | "direct" | "operations" })}><option value="operations">Codex — поручения и оценка работы</option><option value="market">Яндекс Маркет — сборка заказов</option><option value="direct">Яндекс Директ — аналитика</option></select></label>
           <label>Bot token MAX<input type="password" value={maxForm.token} onChange={(event) => setMaxForm({ ...maxForm, token: event.currentTarget.value })} placeholder="Токен из кабинета MAX" minLength={20} autoComplete="off" required /></label>
           <label>ID с доступом <span className="muted">необязательно, через запятую</span><input value={maxForm.allowlist} onChange={(event) => setMaxForm({ ...maxForm, allowlist: event.currentTarget.value })} placeholder="Оставь пустым — доступ выдашь по заявке" /></label>
           <p className="form-hint">После подключения открой бота в MAX и отправь /start. Первый пользователь станет администратором.</p>
@@ -313,6 +320,11 @@ export default function IntegrationsView({ api }: IntegrationsViewProps) {
         <div className="integration-list">{loading ? <div className="loading-line">Загружаем ботов…</div> : marketBots.length ? marketBots.map((bot) => <MaxBotCard bot={bot} deleting={deletingConnectionId === bot.id || busyAction === `webhook-${bot.id}`} onRegister={registerWebhook} onDelete={deleteMaxBot} key={bot.id} />) : <div className="integration-empty">Бот для заказов ещё не подключён.</div>}</div>
       </div>
     </div>
+
+    <section className="integration-workspace-panel">
+      <div className="section-heading"><div><p className="eyebrow">CODEX</p><h3>MAX для работы агентов</h3></div></div>
+      <div className="integration-list">{loading ? <div className="loading-line">Загружаем ботов…</div> : operationBots.length ? operationBots.map((bot) => <MaxBotCard bot={bot} deleting={deletingConnectionId === bot.id || busyAction === `webhook-${bot.id}`} onRegister={registerWebhook} onDelete={deleteMaxBot} key={bot.id} />) : <div className="integration-empty">Выбери «Codex — поручения и оценка работы» в форме MAX выше.</div>}</div>
+    </section>
 
     <section className="integration-workspace-panel">
       <div className="section-heading"><div><p className="eyebrow">OZON SELLER</p><h3>Уведомления о новых заказах</h3></div><span className="muted">FBS и FBO · без дублей</span></div>

@@ -21,6 +21,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError, clearSession, getSavedApiUrl, getSession, TaskmanApi } from "./api";
 import IntegrationsView from "./IntegrationsView";
 import SettingsView from "./SettingsView";
+import AgentOperationsView from "./AgentOperationsView";
 import type {
   Dashboard,
   KnowledgeGraph,
@@ -37,14 +38,14 @@ import type {
 import "./App.css";
 
 type Phase = "checking" | "auth" | "workspace";
-type ActiveView = "overview" | "tasks" | "notes" | "graph" | "integrations" | "settings" | `project:${string}`;
+type ActiveView = "overview" | "tasks" | "notes" | "graph" | "agents" | "integrations" | "settings" | `project:${string}`;
 
 const ACTIVE_VIEW_KEY = "taskman.active-view";
 
 function readActiveView(): ActiveView {
   try {
     const saved = localStorage.getItem(ACTIVE_VIEW_KEY);
-    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved === "integrations" || saved === "settings" || saved?.startsWith("project:")) {
+    if (saved === "overview" || saved === "tasks" || saved === "notes" || saved === "graph" || saved === "agents" || saved === "integrations" || saved === "settings" || saved?.startsWith("project:")) {
       return saved as ActiveView;
     }
   } catch {
@@ -521,6 +522,11 @@ function WorkspaceApp() {
   const [taskEditorStatus, setTaskEditorStatus] = useState<TaskStatus>("inbox");
   const [taskEditorPriority, setTaskEditorPriority] = useState(1);
   const [taskEditorProject, setTaskEditorProject] = useState("");
+  const [agentLaunchTask, setAgentLaunchTask] = useState<Task | null>(null);
+  const [agentGoal, setAgentGoal] = useState("");
+  const [agentMode, setAgentMode] = useState<"auto" | "fast" | "analysis" | "maximum">("auto");
+  const [agentActions, setAgentActions] = useState<Array<"research" | "browser" | "code_preview">>(["research"]);
+  const [agentLaunchError, setAgentLaunchError] = useState("");
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   const [shareMessage, setShareMessage] = useState("");
   const [shareUrl, setShareUrl] = useState("");
@@ -917,6 +923,38 @@ function WorkspaceApp() {
     }
   }
 
+  function openAgentLaunch(task: Task) {
+    setAgentLaunchTask(task);
+    setAgentGoal(task.description_markdown.trim() || task.title);
+    setAgentMode("auto");
+    setAgentActions(["research"]);
+    setAgentLaunchError("");
+  }
+
+  function toggleAgentAction(action: "research" | "browser" | "code_preview") {
+    setAgentActions((current) => {
+      if (action === "research") return current.includes(action) ? current : [action, ...current];
+      return current.includes(action) ? current.filter((item) => item !== action) : [...current, action];
+    });
+  }
+
+  async function submitAgentLaunch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!agentLaunchTask || !agentGoal.trim()) return;
+    setBusy(true);
+    setAgentLaunchError("");
+    try {
+      await api.createAgentRun({ task_id: agentLaunchTask.id, goal: agentGoal.trim(), mode: agentMode, allowed_actions: agentActions });
+      setAgentLaunchTask(null);
+      setSelectedTask(null);
+      setActiveView("agents");
+    } catch (reason) {
+      setAgentLaunchError(reason instanceof Error ? reason.message : "Не удалось запустить работу");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openNewLinkedNote() {
     setNewNoteTitle("");
     setNewNoteContent("");
@@ -1131,8 +1169,8 @@ function WorkspaceApp() {
     .filter(
       (task) => overviewProjectFilter === "all" || task.project_id === overviewProjectFilter,
     );
-  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : activeView === "integrations" ? "Интеграции" : activeView === "settings" ? "Настройки" : `Доброе утро, ${workspace.user.name || workspace.user.username}`);
-  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "integrations" ? "ЯНДЕКС ДИРЕКТ · MAX" : activeView === "settings" ? "ПРОФИЛЬ И ДОСТУП" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
+  const viewTitle = activeProject?.name ?? (activeView === "tasks" ? "Мои задачи" : activeView === "notes" ? "Заметки" : activeView === "graph" ? "Карта знаний" : activeView === "agents" ? "Работа агентов" : activeView === "integrations" ? "Интеграции" : activeView === "settings" ? "Настройки" : `Доброе утро, ${workspace.user.name || workspace.user.username}`);
+  const viewEyebrow = activeProject ? activeProject.key : activeView === "notes" ? "БАЗА ЗНАНИЙ" : activeView === "graph" ? "СВЯЗИ" : activeView === "agents" ? "CODEX · RUNNER" : activeView === "integrations" ? "ЯНДЕКС ДИРЕКТ · MAX" : activeView === "settings" ? "ПРОФИЛЬ И ДОСТУП" : activeView === "tasks" ? "ВСЕ ЗАДАЧИ" : "РАБОЧЕЕ ПРОСТРАНСТВО";
 
   return (
     <main className="workspace-layout">
@@ -1146,6 +1184,7 @@ function WorkspaceApp() {
           <button className={`nav-item ${activeView === "tasks" ? "active" : ""}`} type="button" onClick={() => showTasks()}><span>✓</span> Мои задачи</button>
           <button className={`nav-item ${activeView === "notes" ? "active" : ""}`} type="button" onClick={showNotes}><span>◇</span> Заметки</button>
           <button className={`nav-item ${activeView === "graph" ? "active" : ""}`} type="button" onClick={() => void showGraph()}><span>◌</span> Карта знаний</button>
+          <button className={`nav-item ${activeView === "agents" ? "active" : ""}`} type="button" onClick={() => setActiveView("agents")}><span>🤖</span> Работа агентов</button>
         </nav>
         <p className="nav-title">Проекты</p>
         <nav>
@@ -1252,6 +1291,7 @@ function WorkspaceApp() {
         )}
 
         {activeView === "integrations" && <IntegrationsView api={api} />}
+        {activeView === "agents" && <AgentOperationsView api={api} />}
         {activeView === "settings" && <SettingsView api={api} user={workspace.user} users={workspace.users} onChanged={async () => { await refreshWorkspace(); }} />}
 
         {activeView === "graph" && (
@@ -1378,7 +1418,21 @@ function WorkspaceApp() {
             </div>
             <label>Рабочее пространство<select value={taskEditorProject} onChange={(event) => setTaskEditorProject(event.currentTarget.value)}><option value="">Без пространства</option>{workspace.projects.map((project) => <option value={project.id} key={project.id}>{project.parent_id ? `↳ ${project.name}` : project.name}</option>)}</select></label>
             {detailError && <div className="error-message">{detailError}</div>}
-            <div className="task-editor-actions"><button className="danger-button" type="button" onClick={() => void archiveTaskFromEditor()} disabled={busy}>Архивировать</button><div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setSelectedTask(null)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Сохраняем…" : "Сохранить"}</button></div></div>
+            <div className="task-editor-actions"><div className="task-agent-actions"><button className="secondary-button" type="button" onClick={() => openAgentLaunch(selectedTask)} disabled={busy}>🤖 Поручить Codex</button><button className="danger-button" type="button" onClick={() => void archiveTaskFromEditor()} disabled={busy}>Архивировать</button></div><div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setSelectedTask(null)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Сохраняем…" : "Сохранить"}</button></div></div>
+          </form>
+        </div>
+      )}
+
+      {agentLaunchTask && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAgentLaunchTask(null); }}>
+          <form className="modal-card agent-launch-card" role="dialog" aria-modal="true" aria-label="Поручить Codex" onSubmit={submitAgentLaunch}>
+            <div className="section-heading"><div><p className="eyebrow">{agentLaunchTask.identifier}</p><h2>Поручить Codex</h2></div><button className="icon-button light" type="button" onClick={() => setAgentLaunchTask(null)}>×</button></div>
+            <p className="muted">Агент сам составит рабочий план. Внешние сообщения, расходы и публикации всё равно потребуют вашего отдельного решения.</p>
+            <label>Цель<textarea autoFocus value={agentGoal} onChange={(event) => setAgentGoal(event.currentTarget.value)} rows={5} maxLength={20_000} required /></label>
+            <label>Режим<select value={agentMode} onChange={(event) => setAgentMode(event.currentTarget.value as typeof agentMode)}><option value="auto">Авто</option><option value="fast">Быстро</option><option value="analysis">Анализ</option><option value="maximum">Максимум</option></select></label>
+            <fieldset className="agent-actions"><legend>Разрешённая работа</legend><label><input type="checkbox" checked readOnly /> Только исследование</label><label><input type="checkbox" checked={agentActions.includes("browser")} onChange={() => toggleAgentAction("browser")} /> Работа в браузере</label><label><input type="checkbox" checked={agentActions.includes("code_preview")} onChange={() => toggleAgentAction("code_preview")} /> Изменение кода в preview</label></fieldset>
+            {agentLaunchError && <div className="error-message">{agentLaunchError}</div>}
+            <div className="modal-actions"><button className="secondary-button padded" type="button" onClick={() => setAgentLaunchTask(null)}>Отмена</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "Запускаем…" : "Запустить"}</button></div>
           </form>
         </div>
       )}

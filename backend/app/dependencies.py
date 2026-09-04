@@ -18,7 +18,8 @@ bearer = HTTPBearer(auto_error=False)
 ROLE_SCOPES: dict[UserRole, set[str]] = {
     UserRole.administrator: {"*"},
     UserRole.supervisor: {
-        "projects:read", "projects:write", "tasks:read", "tasks:write", "notes:read", "notes:write"
+        "projects:read", "projects:write", "tasks:read", "tasks:write", "notes:read", "notes:write",
+        "agent_operations:read", "agent_operations:write",
     },
     UserRole.worker: {"projects:read", "tasks:read", "tasks:write", "notes:read", "notes:write"},
 }

@@ -11,7 +11,7 @@ class ApiModel(BaseModel):
 class MaxBotCreate(ApiModel):
     name: str = Field(min_length=1, max_length=120)
     token: str = Field(min_length=20, max_length=4096)
-    integration: Literal["direct", "market"] = "direct"
+    integration: Literal["direct", "market", "operations"] = "direct"
     allowlist: list[int] = Field(default_factory=list, max_length=100)
     target_type: Literal["chat", "user"] | None = None
     target_id: int | None = None
@@ -22,7 +22,7 @@ class MaxBotUpdate(ApiModel):
     base_version: int = Field(ge=1)
     name: str | None = Field(default=None, min_length=1, max_length=120)
     token: str | None = Field(default=None, min_length=20, max_length=4096)
-    integration: Literal["direct", "market"] | None = None
+    integration: Literal["direct", "market", "operations"] | None = None
     allowlist: list[int] | None = Field(default=None, max_length=100)
     target_type: Literal["chat", "user"] | None = None
     target_id: int | None = None

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from ...event_bus.models import DomainEvent
 from ...notifications.service import InteractionRegistry, Notification
-from .formatter import notification_payload
+from .formatter import notification_payload, operations_notification_payload
 from .models import MaxBotConfig, MaxOutboxMessage
 
 
@@ -30,6 +30,8 @@ class MaxNotificationTransport:
             )
         )
         for bot in bots:
+            if event.aggregate_type == "agent_run" and bot.integration != "operations":
+                continue
             if event.aggregate_type == "ozon_posting" and bot.integration != "market":
                 continue
             existing = session.scalar(
@@ -40,17 +42,26 @@ class MaxNotificationTransport:
             )
             if existing:
                 continue
+            payload = (
+                operations_notification_payload(
+                    notification,
+                    run_id=str(event.payload.get("run_id", event.aggregate_id)),
+                    status=str(event.payload.get("status", "")),
+                )
+                if event.aggregate_type == "agent_run"
+                else notification_payload(
+                    notification,
+                    self.interactions,
+                    menu_prefix=bot.integration,
+                )
+            )
             session.add(
                 MaxOutboxMessage(
                     bot_id=bot.id,
                     event_id=event.id,
                     target_type=str(bot.target_type),
                     target_id=int(bot.target_id or 0),
-                    payload=notification_payload(
-                        notification,
-                        self.interactions,
-                        menu_prefix=bot.integration,
-                    ),
+                    payload=payload,
                 )
             )
             queued += 1

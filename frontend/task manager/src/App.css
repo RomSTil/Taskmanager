@@ -481,6 +481,27 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .task-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .task-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .task-editor-actions .modal-actions { margin: 0; }
+.task-agent-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.agent-launch-card { width: min(100%, 640px); }
+.agent-launch-card > .muted { margin: -5px 0 0; line-height: 1.55; }
+.agent-actions { padding: 13px; display: grid; gap: 9px; border: 1px solid var(--line); border-radius: 10px; background: #f4f0e8; }
+.agent-actions legend { padding: 0 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.agent-actions label { display: flex; align-items: center; gap: 9px; color: #524d44; font-size: 13px; }
+.agent-actions input { width: 16px; height: 16px; }
+.agent-operations { display: grid; gap: 16px; }
+.agent-runner-strip { padding: 12px 14px; display: flex; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; background: #f2eee6; }.agent-runner-strip > div { display: flex; align-items: baseline; gap: 7px; color: #514c43; font-size: 12px; }.agent-runner-strip small { color: var(--muted); }.agent-runner-strip em { color: #a54836; font-size: 11px; font-style: normal; }.agent-runner-strip p { margin: 0; color: var(--muted); font-size: 12px; }.runner-online, .runner-offline { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: #c04b39; }.runner-online { background: #4d8a40; box-shadow: 0 0 0 3px rgba(77, 138, 64, .13); }
+.agent-run-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 12px; }
+.agent-run-card { min-height: 126px; padding: 16px; display: grid; align-content: start; gap: 8px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); color: var(--ink); text-align: left; }
+.agent-run-card:hover, .agent-run-card.selected { border-color: var(--accent); box-shadow: 0 8px 22px rgba(63, 49, 31, .1); }
+.agent-run-card strong { line-height: 1.4; }.agent-run-card small { color: var(--muted); font-size: 11px; }
+.agent-status { width: max-content; padding: 4px 8px; border-radius: 12px; background: #e6e2d8; color: #645e55; font-size: 10px; font-weight: 700; }
+.agent-status-running, .agent-status-planning, .agent-status-internal_review, .agent-status-revision { background: #e1edf6; color: #27658d; }
+.agent-status-waiting_approval, .agent-status-waiting_owner_review { background: #fff0cc; color: #8a5a12; }
+.agent-status-completed, .agent-status-accepted { background: #e5f0df; color: #416b36; }
+.agent-status-failed, .agent-status-blocked { background: #f9dfda; color: #9a392a; }
+.agent-run-detail { padding: 22px; display: grid; gap: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }.agent-run-detail h3 { margin: 0; font-size: 19px; }
+.agent-current-role { margin: 0; color: var(--muted); }.agent-result, .agent-approval { padding: 15px; display: grid; gap: 8px; border-radius: 10px; background: #f3f0e8; }.agent-result p, .agent-approval p { margin: 0; line-height: 1.55; }.agent-result a { color: var(--accent-dark); font-weight: 700; }.agent-approval { border-left: 3px solid #e49d2e; }.agent-approval > div, .agent-owner-actions > div { display: flex; justify-content: flex-end; gap: 8px; }
+.agent-owner-actions { display: grid; gap: 10px; }.agent-owner-actions textarea { min-height: 80px; }.agent-event-log { color: var(--muted); font-size: 12px; }.agent-event-log summary { cursor: pointer; font-weight: 700; }.agent-event-log p { margin: 8px 0 0; }.agent-event-log time { color: #9a9388; }
 .danger-button { padding: 11px 13px; border: 1px solid #e6b5ab; border-radius: 9px; background: #fff4f1; color: #b53925; font-weight: 700; }
 .danger-button:hover { background: #fee7e1; }
 .deadline-picker { padding: 18px; display: grid; gap: 16px; border: 1px solid #d9d1c2; border-radius: 15px; background: #f3efe6; }
@@ -531,6 +552,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
   .deadline-inputs, .assignment-section { grid-template-columns: 1fr; }
   .task-editor-grid { grid-template-columns: 1fr; }
   .task-editor-actions { align-items: stretch; flex-direction: column-reverse; }
+  .task-agent-actions { width: 100%; }.task-agent-actions button { flex: 1; }
   .task-editor-actions .modal-actions { justify-content: stretch; }
   .public-note-page { padding: 14px; }
   .public-note-card { padding: 24px 18px; border-radius: 12px; }

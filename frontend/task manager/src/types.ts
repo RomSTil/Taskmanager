@@ -256,7 +256,7 @@ export interface MaxBot {
   id: string;
   name: string;
   token_hint: string;
-  integration: "direct" | "market";
+  integration: "direct" | "market" | "operations";
   allowlist: number[];
   target_type: string | null;
   target_id: number | null;
@@ -307,4 +307,86 @@ export interface OzonSyncResult {
   created: number;
   notified: number;
   baseline: boolean;
+}
+
+export type AgentRunStatus = "queued" | "planning" | "running" | "internal_review" | "waiting_approval" | "waiting_owner_review" | "revision" | "accepted" | "completed" | "cancelled" | "failed" | "blocked";
+export type AgentMode = "auto" | "fast" | "analysis" | "maximum";
+export type AgentRole = "coordinator" | "researcher_developer" | "tester" | "visual_reviewer" | "deploy";
+export type ApprovalAction = "external_message" | "publication" | "money" | "destructive";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export interface AgentRunStep {
+  id: string;
+  role: AgentRole;
+  input_context: Record<string, unknown>;
+  executor: string | null;
+  status: AgentRunStatus;
+  artifact_url: string | null;
+  attempts: number;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AgentEvent {
+  id: string;
+  step_id: string | null;
+  event_type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  actor_type: string;
+  actor_id: string | null;
+  created_at: string;
+}
+
+export interface AgentApproval {
+  id: string;
+  action: ApprovalAction;
+  explanation: string;
+  details: Record<string, unknown>;
+  status: ApprovalStatus;
+  idempotency_key: string;
+  decided_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  task_id: string;
+  parent_run_id: string | null;
+  goal: string;
+  status: AgentRunStatus;
+  mode: AgentMode;
+  selected_model: string | null;
+  selected_effort: string | null;
+  role: AgentRole;
+  runner_id: string | null;
+  approval_policy_id: string | null;
+  allowed_actions: string[];
+  result_note_id: string | null;
+  preview_url: string | null;
+  result_summary: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  lease_expires_at: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: AgentRunStep[];
+  events: AgentEvent[];
+  approvals: AgentApproval[];
+}
+
+export interface AgentRunner {
+  id: string;
+  name: string;
+  version: string;
+  capabilities: string[];
+  max_concurrency: number;
+  enabled: boolean;
+  online: boolean;
+  last_heartbeat_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
 }

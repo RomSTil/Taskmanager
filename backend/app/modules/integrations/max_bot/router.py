@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from ....database import get_session
 from ....dependencies import Principal, get_principal
+from ....models import Task
 from ....security import constant_time_equal, decrypt_secret, hash_token
+from ...agent_operations.models import AgentRun, AgentRunStatus
+from ...agent_operations.schemas import AgentRunCreate
+from ...agent_operations.service import AgentOperationsService
 from ...notifications.service import InteractionRegistry
 from ..yandex_market.service import YandexMarketService
 from .animation import WaitingMessageAnimation
@@ -21,7 +25,7 @@ from .formatter import (
     notification_payload,
     waiting_payload,
 )
-from .models import MaxAccessRequest, MaxBotConfig, MaxUpdate
+from .models import MaxAccessRequest, MaxBotConfig, MaxOperationConversation, MaxUpdate
 from .schemas import (
     MaxAccessRequestRead,
     MaxAccessRequestUpdate,
@@ -125,6 +129,202 @@ COMMAND_ACTIONS = {
     "/settings": "direct.settings",
     "/orders": "market.orders",
 }
+
+
+def _operation_conversation(
+    session: Session,
+    bot: MaxBotConfig,
+    *,
+    user_id: int,
+    target_type: str,
+    target_id: int,
+) -> MaxOperationConversation:
+    item = session.scalar(
+        select(MaxOperationConversation).where(
+            MaxOperationConversation.bot_id == bot.id,
+            MaxOperationConversation.user_id == user_id,
+        )
+    )
+    if item is None:
+        item = MaxOperationConversation(
+            bot_id=bot.id,
+            user_id=user_id,
+            target_type=target_type,
+            target_id=target_id,
+        )
+        session.add(item)
+        session.flush()
+    else:
+        item.target_type = target_type
+        item.target_id = target_id
+    return item
+
+
+def _operation_run_text(runs: list[AgentRun], *, review: bool = False) -> dict[str, Any]:
+    if not runs:
+        return {
+            "text": "Нет запусков" + (" на оценке." if review else " в работе."),
+            "format": "markdown",
+            "notify": True,
+        }
+    lines = ["✅ **Готово на оценку**" if review else "📌 **Активные работы**"]
+    buttons: list[list[dict[str, str]]] = []
+    for run in runs[:5]:
+        lines.append(f"• {run.goal[:120]} — `{run.status.value}`")
+        if review:
+            buttons.append([
+                {"type": "callback", "text": "✅ Принять", "payload": f"operations.accept:{run.id}"},
+                {"type": "callback", "text": "✏️ Замечание", "payload": f"operations.feedback:{run.id}"},
+            ])
+    payload: dict[str, Any] = {"text": "\n".join(lines), "format": "markdown", "notify": True}
+    if buttons:
+        payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
+    return payload
+
+
+def _handle_operations_callback(
+    session: Session,
+    request: Request,
+    service: MaxBotService,
+    bot: MaxBotConfig,
+    *,
+    action: str,
+    user_id: int | None,
+    target_type: str,
+    target_id: int,
+) -> bool:
+    if bot.integration != "operations" or not action.startswith("operations."):
+        return False
+    if user_id is None:
+        return True
+    if action == "operations.start":
+        conversation = _operation_conversation(
+            session, bot, user_id=user_id, target_type=target_type, target_id=target_id
+        )
+        conversation.state = "awaiting_goal"
+        conversation.run_id = None
+        service.queue(
+            session,
+            bot,
+            target_type,
+            target_id,
+            {"text": "Напишите цель свободным текстом. Я сам разобью работу и верну результат на оценку.", "format": "markdown", "notify": True},
+        )
+        return True
+    if action == "operations.active":
+        runs = list(
+            session.scalars(
+                select(AgentRun)
+                .where(AgentRun.status.in_([
+                    AgentRunStatus.queued, AgentRunStatus.planning, AgentRunStatus.running,
+                    AgentRunStatus.internal_review, AgentRunStatus.waiting_approval, AgentRunStatus.revision,
+                ]))
+                .order_by(AgentRun.created_at.desc())
+                .limit(5)
+            )
+        )
+        service.queue(session, bot, target_type, target_id, _operation_run_text(runs))
+        return True
+    if action == "operations.review":
+        runs = list(
+            session.scalars(
+                select(AgentRun)
+                .where(AgentRun.status == AgentRunStatus.waiting_owner_review)
+                .order_by(AgentRun.created_at.desc())
+                .limit(5)
+            )
+        )
+        service.queue(session, bot, target_type, target_id, _operation_run_text(runs, review=True))
+        return True
+    prefix, separator, run_id = action.partition(":")
+    if not separator or not run_id or prefix not in {"operations.accept", "operations.feedback"}:
+        return True
+    run = session.get(AgentRun, run_id)
+    if run is None:
+        service.queue(session, bot, target_type, target_id, {"text": "Запуск не найден.", "notify": True})
+        return True
+    agent_service = request.app.state.module_context.services.get(AgentOperationsService)
+    if prefix == "operations.accept":
+        try:
+            agent_service.accept(session, run, actor_type="max", actor_id=f"max:{user_id}")
+        except ValueError as exc:
+            service.queue(session, bot, target_type, target_id, {"text": f"⚠️ {exc}", "notify": True})
+        else:
+            service.queue(session, bot, target_type, target_id, {"text": "✅ Результат принят.", "notify": True})
+        return True
+    conversation = _operation_conversation(
+        session, bot, user_id=user_id, target_type=target_type, target_id=target_id
+    )
+    conversation.state = "awaiting_feedback"
+    conversation.run_id = run.id
+    service.queue(
+        session,
+        bot,
+        target_type,
+        target_id,
+        {"text": "Напишите замечание свободным текстом. Координатор сам передаст его нужным ролям.", "notify": True},
+    )
+    return True
+
+
+def _handle_operations_message(
+    session: Session,
+    request: Request,
+    service: MaxBotService,
+    bot: MaxBotConfig,
+    *,
+    text: str,
+    user_id: int | None,
+    target_type: str,
+    target_id: int,
+) -> bool:
+    if bot.integration != "operations" or not text or text.startswith("/") or user_id is None:
+        return False
+    conversation = _operation_conversation(
+        session, bot, user_id=user_id, target_type=target_type, target_id=target_id
+    )
+    agent_service = request.app.state.module_context.services.get(AgentOperationsService)
+    if conversation.state == "awaiting_feedback" and conversation.run_id:
+        run = session.get(AgentRun, conversation.run_id)
+        if run is None:
+            service.queue(session, bot, target_type, target_id, {"text": "Запуск не найден.", "notify": True})
+        else:
+            try:
+                agent_service.return_for_feedback(
+                    session,
+                    run,
+                    message=text,
+                    labels=[],
+                    actor_type="max",
+                    actor_id=f"max:{user_id}",
+                )
+            except ValueError as exc:
+                service.queue(session, bot, target_type, target_id, {"text": f"⚠️ {exc}", "notify": True})
+            else:
+                service.queue(session, bot, target_type, target_id, {"text": "↩️ Замечание принято, запускаю доработку.", "notify": True})
+        conversation.state = "idle"
+        return True
+    task = Task(
+        title=text[:300],
+        description_markdown=text,
+        source="max",
+        source_data={"max_bot_id": bot.id, "max_user_id": user_id},
+    )
+    session.add(task)
+    session.flush()
+    run = agent_service.create_run(
+        session,
+        AgentRunCreate(
+            task_id=task.id,
+            goal=text,
+            mode="auto",
+            allowed_actions=["research", "browser"],
+        ),
+        user_id=None,
+    )
+    conversation.state = "running"
+    conversation.run_id = run.id
+    return True
 
 
 @router.get("/integrations/max/bots", response_model=list[MaxBotRead])
@@ -435,7 +635,8 @@ def max_webhook(
         if not allowed:
             session.commit()
             return {"accepted": True}
-    text = _message_text(update).casefold()
+    raw_text = _message_text(update)
+    text = raw_text.casefold()
     if update_type in {"bot_started", "bot_added"} or text in {"/start", "/menu"}:
         service.queue(
             session,
@@ -445,6 +646,18 @@ def max_webhook(
             menu_payload(interactions, bot.integration),
         )
     elif update_type == "message_callback":
+        if _handle_operations_callback(
+            session,
+            request,
+            service,
+            bot,
+            action=action,
+            user_id=user_id,
+            target_type=target_type,
+            target_id=target_id,
+        ):
+            session.commit()
+            return {"accepted": True}
         role = service.user_role(session, bot, user_id)
         if action.startswith("market.pack:"):
             if bot.integration != "market" or role != "picker" or user_id is None:
@@ -546,6 +759,18 @@ def max_webhook(
                 menu_prefix=bot.integration,
             ),
         )
+    elif _handle_operations_message(
+        session,
+        request,
+        service,
+        bot,
+        text=raw_text,
+        user_id=user_id,
+        target_type=target_type,
+        target_id=target_id,
+    ):
+        session.commit()
+        return {"accepted": True}
     elif text in COMMAND_ACTIONS:
         action = COMMAND_ACTIONS[text]
         if not action.startswith(f"{bot.integration}."):

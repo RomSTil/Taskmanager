@@ -24,6 +24,9 @@ import type {
   MaxAccessRequest,
   OzonAccount,
   OzonSyncResult,
+  AgentRun,
+  AgentRunner,
+  AgentMode,
 } from "./types";
 
 const API_URL_KEY = "taskman.apiUrl";
@@ -443,7 +446,7 @@ export class TaskmanApi {
   createMaxBot(input: {
     name: string;
     token: string;
-    integration: "direct" | "market";
+    integration: "direct" | "market" | "operations";
     allowlist: number[];
   }): Promise<MaxBotCreated> {
     return this.request<MaxBotCreated>("/integrations/max/bots", {
@@ -516,6 +519,47 @@ export class TaskmanApi {
     return this.request<MaxAccessRequest>(
       `/integrations/max/bots/${encodeURIComponent(botId)}/access-requests/${encodeURIComponent(requestId)}`,
       { method: "PATCH", body: JSON.stringify(input) },
+      true,
+    );
+  }
+
+  listAgentRuns(): Promise<AgentRun[]> {
+    return this.request<AgentRun[]>("/agent-runs", {}, true);
+  }
+
+  listAgentRunners(): Promise<AgentRunner[]> {
+    return this.request<AgentRunner[]>("/agent-runners", {}, true);
+  }
+
+  createAgentRun(input: {
+    task_id: string;
+    goal: string;
+    mode: AgentMode;
+    allowed_actions: Array<"research" | "browser" | "code_preview">;
+  }): Promise<AgentRun> {
+    return this.request<AgentRun>("/agent-runs", { method: "POST", body: JSON.stringify(input) }, true);
+  }
+
+  cancelAgentRun(runId: string): Promise<AgentRun> {
+    return this.request<AgentRun>(`/agent-runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, true);
+  }
+
+  acceptAgentRun(runId: string): Promise<AgentRun> {
+    return this.request<AgentRun>(`/agent-runs/${encodeURIComponent(runId)}/accept`, { method: "POST" }, true);
+  }
+
+  feedbackAgentRun(runId: string, message: string, labels: Array<"too_template" | "off_brand" | "logic" | "bug">): Promise<AgentRun> {
+    return this.request<AgentRun>(
+      `/agent-runs/${encodeURIComponent(runId)}/feedback`,
+      { method: "POST", body: JSON.stringify({ message, labels }) },
+      true,
+    );
+  }
+
+  decideAgentApproval(runId: string, approvalId: string, decision: "approved" | "rejected"): Promise<AgentRun> {
+    return this.request<AgentRun>(
+      `/agent-runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision`,
+      { method: "POST", body: JSON.stringify({ decision }) },
       true,
     );
   }

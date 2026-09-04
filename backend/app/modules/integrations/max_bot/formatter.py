@@ -35,6 +35,31 @@ def notification_payload(
     return payload
 
 
+def operations_notification_payload(
+    notification: Notification,
+    *,
+    run_id: str,
+    status: str,
+) -> dict:
+    buttons: list[list[dict[str, str]]]
+    if status == "waiting_owner_review":
+        buttons = [[
+            {"type": "callback", "text": "✅ Принять", "payload": f"operations.accept:{run_id}"},
+            {"type": "callback", "text": "✏️ Написать замечание", "payload": f"operations.feedback:{run_id}"},
+        ]]
+    else:
+        buttons = [[
+            {"type": "callback", "text": "📌 Активные", "payload": "operations.active"},
+            {"type": "callback", "text": "✅ Готово на оценку", "payload": "operations.review"},
+        ]]
+    return {
+        "text": notification.text[:4000],
+        "format": "markdown",
+        "notify": True,
+        "attachments": [{"type": "inline_keyboard", "payload": {"buttons": buttons}}],
+    }
+
+
 def waiting_payload(action_label: str, dots: int = 0) -> dict:
     return {
         "text": (
@@ -71,6 +96,12 @@ def access_request_payload(
                 "text": "❌ Отклонить",
                 "payload": f"max.access.deny:{request_id}",
             },
+        ]
+    elif integration == "operations":
+        question = "Разрешить ему ставить и оценивать работу Codex?"
+        buttons = [
+            {"type": "callback", "text": "✅ Принять", "payload": f"max.access.approve:{request_id}"},
+            {"type": "callback", "text": "❌ Отклонить", "payload": f"max.access.deny:{request_id}"},
         ]
     else:
         question = "Разрешить ему просмотр статистики Яндекс Директа?"
@@ -132,6 +163,19 @@ def menu_payload(interactions: InteractionRegistry, integration: str = "direct")
     if integration == "market":
         title = "📦 **Заказы маркетплейсов**"
         description = "Здесь можно посмотреть заказы Яндекс Маркета и Ozon Seller."
+    elif integration == "operations":
+        return {
+            "text": "🤖 **Работа Codex**\nПоручите цель одной фразой — я запущу автономную команду. "
+            "Внешние сообщения, публикации и расходы всегда потребуют отдельного решения.",
+            "format": "markdown",
+            "notify": True,
+            "attachments": [{"type": "inline_keyboard", "payload": {"buttons": [[
+                {"type": "callback", "text": "🤖 Поручить работу", "payload": "operations.start"},
+                {"type": "callback", "text": "📌 Активные", "payload": "operations.active"},
+            ], [
+                {"type": "callback", "text": "✅ Готово на оценку", "payload": "operations.review"},
+            ]]}}],
+        }
     else:
         title = "📊 **Яндекс Директ**"
         description = (

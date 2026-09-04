@@ -74,6 +74,30 @@ class MaxAccessRequest(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MaxOperationConversation(Base):
+    __tablename__ = "max_operation_conversations"
+    __table_args__ = (
+        UniqueConstraint("bot_id", "user_id", name="uq_max_operation_conversation_user"),
+        Index("ix_max_operation_conversation_state", "bot_id", "state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    bot_id: Mapped[str] = mapped_column(
+        ForeignKey("max_bot_configs.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    target_type: Mapped[str] = mapped_column(String(16))
+    target_id: Mapped[int] = mapped_column(BigInteger)
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    state: Mapped[str] = mapped_column(String(32), default="awaiting_goal", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class MaxOutboxMessage(Base):
     __tablename__ = "max_outbox_messages"
     __table_args__ = (

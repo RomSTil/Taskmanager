@@ -130,6 +130,21 @@ class NotificationService:
 
     def format_event(self, event: DomainEvent) -> Notification:
         payload = event.payload
+        if event.event_type == "AgentRunChanged":
+            status_labels = {
+                "queued": "в очереди",
+                "waiting_approval": "нужно решение",
+                "waiting_owner_review": "на вашей оценке",
+                "completed": "готово",
+                "failed": "ошибка",
+                "blocked": "заблокировано",
+                "cancelled": "остановлено",
+            }
+            return Notification(
+                "🤖 **Работа Codex**\n"
+                f"{payload.get('summary', 'Статус запуска изменился.')}\n"
+                f"Статус: **{status_labels.get(str(payload.get('status')), 'в работе')}**"
+            )
         if event.event_type == "OzonOrderCreated":
             products = payload.get("products") or []
             product_lines: list[str] = []
