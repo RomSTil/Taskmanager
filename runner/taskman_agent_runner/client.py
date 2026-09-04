@@ -1,7 +1,10 @@
 import json
+import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import certifi
 
 
 class TaskmanClient:
@@ -31,7 +34,9 @@ class TaskmanClient:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = Request(f"{self.api_url}/api/v1{path}", data=body, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=30) as response:  # noqa: S310 - configured owner endpoint
+            # Windows Python can otherwise fall back to a stale OpenSSL CA bundle.
+            tls_context = ssl.create_default_context(cafile=certifi.where())
+            with urlopen(request, timeout=30, context=tls_context) as response:  # noqa: S310 - configured owner endpoint
                 raw = response.read()
         except HTTPError as exc:
             message = exc.read().decode("utf-8", errors="replace")[:1_000]

@@ -8,7 +8,7 @@
 ```powershell
 cd C:\projects\Taskmanager\runner
 py -m pip install -e .
-taskman-agent-runner register --api-url https://taskman.example --name "Owner PC" --workspace C:\projects\Taskmanager
+taskman-agent-runner register --api-url https://api.taskman.example --name "Owner PC" --workspace C:\projects\Taskmanager
 taskman-agent-runner run
 ```
 

@@ -3,6 +3,9 @@ name = "taskman-agent-runner"
 version = "0.1.0"
 description = "Windows runner for Taskman Codex agent operations"
 requires-python = ">=3.12"
+dependencies = [
+    "certifi>=2025.1.31",
+]
 
 [project.scripts]
 taskman-agent-runner = "taskman_agent_runner.cli:main"
