@@ -46,6 +46,7 @@ export default function SettingsView({ api, user, users, onChanged }: SettingsVi
   const [accessLogs, setAccessLogs] = useState<UserAccessLog[]>([]);
   const [mcpTokens, setMcpTokens] = useState<ApiToken[]>([]);
   const [mcpToken, setMcpToken] = useState("");
+  const [runnerToken, setRunnerToken] = useState("");
   const administrator = user.role === "administrator";
 
   useEffect(() => {
@@ -118,6 +119,23 @@ export default function SettingsView({ api, user, users, onChanged }: SettingsVi
     }
   }
 
+  async function createRunnerToken() {
+    setBusy(true); setError(""); setMessage(""); setRunnerToken("");
+    try {
+      const created = await api.createApiToken({
+        name: `Codex Runner ${new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(new Date())}`,
+        scopes: ["agent_operations:read", "agent_operations:write"],
+      });
+      setRunnerToken(created.token);
+      setMcpTokens((current) => [created, ...current]);
+      setMessage("Токен Codex Runner создан. Скопируйте его сейчас: повторно он не отображается.");
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function revokeMcpToken(token: ApiToken) {
     setBusy(true); setError(""); setMessage("");
     try {
@@ -182,6 +200,13 @@ export default function SettingsView({ api, user, users, onChanged }: SettingsVi
         <button className="primary-button" type="button" onClick={() => void createMcpToken()} disabled={busy}>Создать MCP-токен</button>
         {mcpToken && <div className="integration-secret"><strong>Токен — скопируйте сейчас:</strong><code>{mcpToken}</code><span>После закрытия страницы увидеть его снова нельзя.</span><strong>Команда подключения:</strong><code>{`taskman-mcp login --url ${api.baseUrl} --token ${mcpToken}`}</code></div>}
         <div className="mcp-token-list">{mcpTokens.length ? mcpTokens.map((token) => <div className="settings-user-row" key={token.id}><div><strong>{token.name}</strong><span>Создан {new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(new Date(token.created_at))}</span></div><button className="text-button danger" type="button" disabled={busy} onClick={() => void revokeMcpToken(token)}>Отозвать</button></div>) : <p className="form-hint">Активных MCP-токенов нет.</p>}</div>
+      </section>}
+
+      {administrator && <section className="settings-card settings-mcp">
+        <div><p className="eyebrow">CODEX RUNNER</p><h3>Основной ПК</h3><p className="form-hint">Создайте отдельный токен для подключения ПК. Он даёт доступ только к очереди и управлению запусками агентов.</p></div>
+        <div className="mcp-connection"><span>Адрес API</span><code>{api.baseUrl}</code></div>
+        <button className="primary-button" type="button" onClick={() => void createRunnerToken()} disabled={busy}>Создать токен Runner</button>
+        {runnerToken && <div className="integration-secret"><strong>Токен — скопируйте сейчас:</strong><code>{runnerToken}</code><span>После закрытия страницы увидеть его снова нельзя.</span><strong>Команда подключения:</strong><code>{`taskman-agent-runner register --api-url ${api.baseUrl} --name "Основной ПК" --workspace C:\\projects\\Taskmanager`}</code></div>}
       </section>}
     </section>
   );

@@ -12,6 +12,8 @@ taskman-agent-runner register --api-url https://api.taskman.example --name "Owne
 taskman-agent-runner run
 ```
 
+Create a dedicated API token with `agent_operations:read` and `agent_operations:write` before pairing. Do not use an MCP Bridge token for the runner.
+
 Для pairing CLI запросит короткоживущий API-token владельца через скрытый ввод.
 В production API URL должен использовать HTTPS. Разработчик получает отдельную
 Git worktree и не работает в `main`; worktree с изменениями сохраняется для

@@ -19,6 +19,8 @@ API_TOKEN_SCOPES = frozenset(
         "tasks:write",
         "notes:read",
         "notes:write",
+        "agent_operations:read",
+        "agent_operations:write",
     }
 )
 JWT_ISSUER = "taskman"

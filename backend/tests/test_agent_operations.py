@@ -24,6 +24,22 @@ def _runner(client: TestClient, headers: dict[str, str]) -> tuple[str, dict[str,
     return body["id"], {"X-Taskman-Runner-Token": body["runner_token"]}
 
 
+def test_scoped_api_token_can_register_runner(client: TestClient, auth_headers: dict[str, str]) -> None:
+    token = client.post(
+        "/api/v1/auth/tokens",
+        headers=auth_headers,
+        json={"name": "Codex Runner", "scopes": ["agent_operations:write"]},
+    ).json()["token"]
+
+    response = client.post(
+        "/api/v1/agent-runners/register",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Scoped runner", "version": "0.1.0", "capabilities": ["codex"]},
+    )
+
+    assert response.status_code == 201, response.text
+
+
 def test_agent_run_requires_owner_review_and_approval(client: TestClient, auth_headers: dict[str, str]) -> None:
     task_id = _task(client, auth_headers)
     created = client.post(

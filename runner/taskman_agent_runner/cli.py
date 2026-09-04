@@ -9,7 +9,7 @@ from .runner import LocalRunner
 
 
 def _register(args: argparse.Namespace) -> None:
-    owner_token = getpass.getpass("Одноразовый owner API token: ").strip()
+    owner_token = getpass.getpass("Одноразовый API token для Codex Runner: ").strip()
     if not owner_token:
         raise RuntimeError("Owner API token is required for pairing")
     response = TaskmanClient(args.api_url, owner_token=owner_token).request(
