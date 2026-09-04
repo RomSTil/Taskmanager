@@ -74,8 +74,8 @@ class AgentOperationsService:
             payload.get("run_id") != run.id
             or payload.get("runner_id") != runner.id
             or payload.get("role") != run.role.value
-            or not isinstance(payload.get("lease"), int)
-            or payload["lease"] < int(datetime.now(UTC).timestamp())
+            or run.lease_expires_at is None
+            or run.lease_expires_at < datetime.now(UTC)
         ):
             raise PermissionError("Expired or mismatched assignment")
 

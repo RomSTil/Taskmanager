@@ -1,6 +1,12 @@
+import hashlib
+import hmac
+import json
+from datetime import UTC, datetime, timedelta
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.models import Task
 from app.modules.agent_operations.models import AgentRun
 from app.modules.integrations.max_bot.models import MaxOutboxMessage
@@ -40,7 +46,7 @@ def test_scoped_api_token_can_register_runner(client: TestClient, auth_headers: 
     assert response.status_code == 201, response.text
 
 
-def test_agent_run_requires_owner_review_and_approval(client: TestClient, auth_headers: dict[str, str]) -> None:
+def test_agent_run_requires_owner_review_and_approval(client: TestClient, auth_headers: dict[str, str], db_session) -> None:
     task_id = _task(client, auth_headers)
     created = client.post(
         "/api/v1/agent-runs",
@@ -60,7 +66,21 @@ def test_agent_run_requires_owner_review_and_approval(client: TestClient, auth_h
     assert claimed.status_code == 200, claimed.text
     assert claimed.json()["run"]["id"] == run_id
     assert claimed.json()["assignment_token"]
-    assignment_headers = runner_headers | {"X-Taskman-Assignment": claimed.json()["assignment_token"]}
+    run = db_session.get(AgentRun, run_id)
+    assert run is not None
+    run.lease_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+    db_session.commit()
+    payload = {
+        "run_id": run_id,
+        "runner_id": runner_id,
+        "role": "coordinator",
+        "lease": int(datetime.now(UTC).timestamp()) - 1,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    signature = hmac.new(
+        get_settings().effective_jwt_secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    assignment_headers = runner_headers | {"X-Taskman-Assignment": f"{encoded}.{signature}"}
 
     progress = client.post(
         f"/api/v1/agent-runs/{run_id}/events",
