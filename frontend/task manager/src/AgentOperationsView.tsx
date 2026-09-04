@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { TaskmanApi } from "./api";
-import type { AgentRun, AgentRunner, AgentRunStatus } from "./types";
+import type { AgentEvent, AgentRun, AgentRunner, AgentRunStatus } from "./types";
 
 const statusLabel: Record<AgentRunStatus, string> = {
   queued: "В очереди", planning: "Планирование", running: "Идёт работа", internal_review: "Внутренняя проверка",
@@ -13,6 +13,15 @@ const roleLabel = {
   visual_reviewer: "Визуальный ревьюер", deploy: "Деплой-агент",
 };
 
+const eventIcon: Record<string, string> = {
+  role: "👤", plan: "🗺", analysis: "🔎", action: "⚙", action_complete: "✓", mcp: "🔗", mcp_complete: "✓", report: "✦",
+};
+
+function eventRole(event: AgentEvent) {
+  const role = event.payload.role;
+  return typeof role === "string" && role in roleLabel ? roleLabel[role as keyof typeof roleLabel] : "Система";
+}
+
 export default function AgentOperationsView({ api }: { api: TaskmanApi }) {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [runners, setRunners] = useState<AgentRunner[]>([]);
@@ -21,8 +30,8 @@ export default function AgentOperationsView({ api }: { api: TaskmanApi }) {
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [next, nextRunners] = await Promise.all([api.listAgentRuns(), api.listAgentRunners()]);
       setRuns(next);
@@ -32,11 +41,16 @@ export default function AgentOperationsView({ api }: { api: TaskmanApi }) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось загрузить запуски");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [api]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!runs.some((run) => ["queued", "planning", "running", "internal_review", "revision"].includes(run.status))) return;
+    const timer = window.setInterval(() => void load(true), 4_000);
+    return () => window.clearInterval(timer);
+  }, [load, runs]);
 
   async function update(action: () => Promise<AgentRun>) {
     try {
@@ -66,7 +80,7 @@ export default function AgentOperationsView({ api }: { api: TaskmanApi }) {
       {selected.approvals.filter((approval) => approval.status === "pending").map((approval) => <div className="agent-approval" key={approval.id}><strong>Нужно решение: {approval.action}</strong><p>{approval.explanation}</p><div><button className="secondary-button" type="button" onClick={() => void update(() => api.decideAgentApproval(selected.id, approval.id, "rejected"))}>Отклонить</button><button className="primary-button compact" type="button" onClick={() => void update(() => api.decideAgentApproval(selected.id, approval.id, "approved"))}>Разрешить</button></div></div>)}
       {selected.status === "waiting_owner_review" && <div className="agent-owner-actions"><textarea aria-label="Замечание владельца" value={feedback} onChange={(event) => setFeedback(event.currentTarget.value)} placeholder="Опишите, что переделать — без технического ТЗ" rows={3} /><div><button className="secondary-button" type="button" disabled={!feedback.trim()} onClick={() => void update(async () => { const result = await api.feedbackAgentRun(selected.id, feedback, []); setFeedback(""); return result; })}>Переделать</button><button className="primary-button compact" type="button" onClick={() => void update(() => api.acceptAgentRun(selected.id))}>Принять</button></div></div>}
       {["queued", "planning", "running", "internal_review", "revision"].includes(selected.status) && <button className="danger-button" type="button" onClick={() => void update(() => api.cancelAgentRun(selected.id))}>Остановить</button>}
-      <details className="agent-event-log"><summary>Технический журнал · {selected.events.length}</summary>{selected.events.map((event) => <p key={event.id}><time>{new Date(event.created_at).toLocaleTimeString("ru-RU")}</time> {event.summary || event.event_type}</p>)}</details>
+      <section className="agent-trace"><div><p className="eyebrow">ПРОЗРАЧНЫЙ СЛЕД РАБОТЫ</p><h4>Что делают агенты</h4><span>Обновляется автоматически, пока идёт работа.</span></div><ol>{selected.events.map((event) => <li key={event.id} className={`agent-trace-${String(event.payload.kind || "system")}`}><div className="agent-trace-meta"><span>{eventIcon[String(event.payload.kind || "")] || "•"}</span><strong>{eventRole(event)}</strong><time>{new Date(event.created_at).toLocaleTimeString("ru-RU")}</time></div><p>{event.summary || event.event_type}</p>{typeof event.payload.text === "string" && <blockquote>{event.payload.text}</blockquote>}</li>)}</ol></section>
     </article>}
   </section>;
 }

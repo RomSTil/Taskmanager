@@ -1,5 +1,8 @@
 import json
+import queue
+import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -59,7 +62,11 @@ class LocalRunner:
             "POST",
             f"/agent-runs/{run_id}/events",
             assignment_token=headers,
-            payload={"event_type": "role_started", "summary": "Codex начал назначенную роль."},
+            payload={
+                "event_type": "role_started",
+                "summary": f"Роль запущена: {ROLE_PROMPTS.get(role, role).split('.')[0]}.",
+                "payload": {"role": role, "kind": "role"},
+            },
         )
         worktree: Path | None = None
         try:
@@ -69,7 +76,8 @@ class LocalRunner:
                 existing = self._worktree_path(run_id)
                 if existing.exists():
                     worktree = existing
-            result, cancelled = self._run_codex(run, worktree)
+            self._progress(run_id, headers, "Агент формирует план текущего этапа.", role=role, kind="plan")
+            result, cancelled = self._run_codex(run, worktree, headers)
             if cancelled:
                 return
             if result.returncode != 0:
@@ -124,7 +132,7 @@ class LocalRunner:
                 self._remove_worktree(worktree)
 
     def _run_codex(
-        self, run: dict[str, Any], worktree: Path | None
+        self, run: dict[str, Any], worktree: Path | None, assignment_token: str | None = None
     ) -> tuple[subprocess.CompletedProcess[str], bool]:
         role = str(run["role"])
         prompt = "\n\n".join(
@@ -140,17 +148,32 @@ class LocalRunner:
             self.config.codex_command,
             "exec",
             "--approve-for-me",
+            "--json",
             prompt,
         ]
         process = subprocess.Popen(
             command,
             cwd=str(worktree or Path(self.config.workspace_path)),
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            bufsize=1,
         )
+        output: queue.Queue[str] = queue.Queue()
+
+        def collect_output() -> None:
+            if process.stdout is None:
+                return
+            for line in process.stdout:
+                output.put(line)
+
+        threading.Thread(target=collect_output, daemon=True).start()
         while process.poll() is None:
-            time.sleep(min(10, self.config.poll_seconds))
+            try:
+                line = output.get(timeout=min(10, self.config.poll_seconds))
+                self._record_codex_event(run, assignment_token, line)
+            except queue.Empty:
+                pass
             self.client.request(
                 "POST",
                 f"/agent-runners/{self.config.runner_id}/heartbeat",
@@ -167,7 +190,58 @@ class LocalRunner:
                     process.kill()
                     process.wait(timeout=5)
                 return subprocess.CompletedProcess(command, process.returncode), True
+        while not output.empty():
+            self._record_codex_event(run, assignment_token, output.get_nowait())
         return subprocess.CompletedProcess(command, process.returncode), False
+
+    def _record_codex_event(self, run: dict[str, Any], assignment_token: str | None, line: str) -> None:
+        if not assignment_token:
+            return
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        progress = self._codex_progress(event)
+        if progress is None:
+            return
+        summary, payload = progress
+        self._progress(str(run["id"]), assignment_token, summary, role=str(run["role"]), **payload)
+
+    def _progress(self, run_id: str, assignment_token: str, summary: str, *, role: str, **payload: Any) -> None:
+        self.client.request(
+            "POST",
+            f"/agent-runs/{run_id}/events",
+            assignment_token=assignment_token,
+            payload={"event_type": "progress", "summary": summary, "payload": {"role": role, **payload}},
+        )
+
+    @staticmethod
+    def _codex_progress(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+        event_type = str(event.get("type") or "")
+        item = event.get("item")
+        item_type = str(item.get("type") or "") if isinstance(item, dict) else ""
+        if event_type == "turn.started":
+            return "Агент приступил к анализу контекста.", {"kind": "analysis"}
+        if event_type == "item.started" and item_type == "reasoning":
+            return "Агент анализирует задачу и уточняет план.", {"kind": "analysis"}
+        if event_type == "item.started" and item_type == "command_execution":
+            return "Агент выполняет проверку в рабочем окружении.", {"kind": "action"}
+        if event_type == "item.started" and item_type == "mcp_tool_call":
+            return "Агент обращается к инструменту TaskManager.", {"kind": "mcp"}
+        if event_type == "item.completed" and item_type == "command_execution":
+            return "Проверка в рабочем окружении завершена.", {"kind": "action_complete"}
+        if event_type == "item.completed" and item_type == "mcp_tool_call":
+            return "Инструмент TaskManager вернул результат.", {"kind": "mcp_complete"}
+        if event_type == "item.completed" and item_type == "agent_message":
+            text = LocalRunner._safe_text(str(item.get("text") or ""))
+            if text:
+                return "Промежуточный вывод агента.", {"kind": "report", "text": text[:1_200]}
+        return None
+
+    @staticmethod
+    def _safe_text(value: str) -> str:
+        compact = " ".join(value.split())
+        return re.sub(r"(?i)(bearer\\s+|tm_|sk-|y0_)[A-Za-z0-9_-]{8,}", r"\\1[скрыто]", compact)
 
     def _create_worktree(self, run_id: str) -> Path:
         root = Path(self.config.workspace_path).resolve()
