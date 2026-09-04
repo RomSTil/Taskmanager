@@ -136,7 +136,14 @@ class LocalRunner:
                 "Не отправляй внешние сообщения, не публикуй и не трать деньги без созданного server-side approval.",
             ]
         )
-        command = [self.config.codex_command, "exec", "--full-auto", prompt]
+        command = [
+            self.config.codex_command,
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--approve-for-me",
+            prompt,
+        ]
         process = subprocess.Popen(
             command,
             cwd=str(worktree or Path(self.config.workspace_path)),
