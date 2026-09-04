@@ -24,7 +24,7 @@ class RunnerTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertEqual(command[0:2], ["codex", "exec"])
         self.assertIn("--approve-for-me", command)
-        self.assertEqual(command[command.index("--sandbox") + 1], "workspace-write")
+        self.assertNotIn("--sandbox", command)
 
 
 if __name__ == "__main__":

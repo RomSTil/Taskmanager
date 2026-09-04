@@ -139,8 +139,6 @@ class LocalRunner:
         command = [
             self.config.codex_command,
             "exec",
-            "--sandbox",
-            "workspace-write",
             "--approve-for-me",
             prompt,
         ]
