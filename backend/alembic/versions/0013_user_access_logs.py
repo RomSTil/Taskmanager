@@ -1,16 +1,15 @@
 """Add user access log.
 
-Revision ID: 0007_user_access
-Revises: 0006_users
+Revision ID: 0013
+Revises: 0012
 """
 
 from alembic import op
 
 from app.models import UserAccessLog
 
-
-revision = "0007_user_access"
-down_revision = "0006_users"
+revision = "0013"
+down_revision = "0012"
 branch_labels = None
 depends_on = None
 
