@@ -157,6 +157,8 @@ class LocalRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         output: queue.Queue[str] = queue.Queue()

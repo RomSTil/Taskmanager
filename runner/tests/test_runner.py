@@ -27,6 +27,8 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--approve-for-me", command)
         self.assertIn("--json", command)
         self.assertNotIn("--sandbox", command)
+        self.assertEqual(popen.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(popen.call_args.kwargs["errors"], "replace")
 
     def test_progress_reports_safe_agent_activity_without_private_reasoning(self):
         progress = LocalRunner._codex_progress({"type": "item.started", "item": {"type": "reasoning"}})
