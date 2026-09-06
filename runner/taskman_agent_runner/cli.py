@@ -33,6 +33,7 @@ def _register(args: argparse.Namespace) -> None:
             workspace_path=str(Path(args.workspace).resolve()),
             poll_seconds=args.poll_seconds,
             codex_command=args.codex_command,
+            codex_model=args.codex_model,
         )
     )
     print(f"Runner paired: {runner_id}. Token is stored in Windows Credential Manager.")
@@ -52,6 +53,7 @@ def main() -> None:
     register.add_argument("--workspace", required=True, help="Local Git repository for code tasks")
     register.add_argument("--poll-seconds", type=float, default=20.0)
     register.add_argument("--codex-command", default="codex")
+    register.add_argument("--codex-model", default="gpt-6-astra")
     register.set_defaults(func=_register)
     run = subparsers.add_parser("run", help="Start the polling runner")
     run.set_defaults(func=_run)

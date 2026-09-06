@@ -33,6 +33,7 @@ class AgentMode(str, enum.Enum):
 
 class AgentRole(str, enum.Enum):
     coordinator = "coordinator"
+    market_researcher = "market_researcher"
     researcher_developer = "researcher_developer"
     tester = "tester"
     visual_reviewer = "visual_reviewer"
@@ -74,6 +75,9 @@ class AgentRun(Base):
     )
     selected_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     selected_effort: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    usage_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
     role: Mapped[AgentRole] = mapped_column(
         Enum(AgentRole, native_enum=False), default=AgentRole.coordinator
     )

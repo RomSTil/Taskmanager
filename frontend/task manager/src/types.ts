@@ -311,7 +311,7 @@ export interface OzonSyncResult {
 
 export type AgentRunStatus = "queued" | "planning" | "running" | "internal_review" | "waiting_approval" | "waiting_owner_review" | "revision" | "accepted" | "completed" | "cancelled" | "failed" | "blocked";
 export type AgentMode = "auto" | "fast" | "analysis" | "maximum";
-export type AgentRole = "coordinator" | "researcher_developer" | "tester" | "visual_reviewer" | "deploy";
+export type AgentRole = "coordinator" | "market_researcher" | "researcher_developer" | "tester" | "visual_reviewer" | "deploy";
 export type ApprovalAction = "external_message" | "publication" | "money" | "destructive";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
@@ -359,6 +359,9 @@ export interface AgentRun {
   mode: AgentMode;
   selected_model: string | null;
   selected_effort: string | null;
+  usage_input_tokens: number;
+  usage_output_tokens: number;
+  usage_reasoning_tokens: number;
   role: AgentRole;
   runner_id: string | null;
   approval_policy_id: string | null;

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.models import Task
 from app.modules.agent_operations.models import AgentRun
+from app.models import OutboxMessage, TelegramAgentSubscription
 from app.modules.integrations.max_bot.models import MaxOutboxMessage
 from app.modules.notifications.service import NotificationService
 
@@ -151,6 +152,66 @@ def test_runner_can_observe_a_cancelled_assignment(client: TestClient, auth_head
     control = client.get(f"/api/v1/agent-runners/{runner_id}/control", headers=runner_headers)
     assert control.status_code == 200, control.text
     assert control.json()["cancelled_run_ids"] == [run["id"]]
+
+
+def test_research_run_routes_to_market_researcher_and_records_usage(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    task_id = _task(client, auth_headers)
+    run = client.post(
+        "/api/v1/agent-runs",
+        headers=auth_headers,
+        json={"task_id": task_id, "goal": "Найти поставщиков", "allowed_actions": ["research", "browser"]},
+    ).json()
+    runner_id, runner_headers = _runner(client, auth_headers)
+    assignment = client.post(f"/api/v1/agent-runners/{runner_id}/claim", headers=runner_headers).json()
+    headers = runner_headers | {"X-Taskman-Assignment": assignment["assignment_token"]}
+    progress = client.post(
+        f"/api/v1/agent-runs/{run['id']}/events",
+        headers=headers,
+        json={
+            "event_type": "progress",
+            "summary": "Выбрана модель.",
+            "payload": {"model": "gpt-6-astra", "effort": "automatic", "input_tokens": 120, "output_tokens": 33},
+        },
+    )
+    assert progress.status_code == 201, progress.text
+    handoff = client.post(
+        f"/api/v1/agent-runs/{run['id']}/events",
+        headers=headers,
+        json={"event_type": "role_completed", "summary": "Передаю исследователю.", "payload": {"next_role": "market_researcher"}},
+    )
+    assert handoff.status_code == 201, handoff.text
+    current = client.get(f"/api/v1/agent-runs/{run['id']}", headers=auth_headers).json()
+    assert current["role"] == "market_researcher"
+    assert current["selected_model"] == "gpt-6-astra"
+    assert current["usage_input_tokens"] == 120
+    assert current["usage_output_tokens"] == 33
+
+
+def test_telegram_start_subscribes_chat_to_safe_agent_trace(
+    client: TestClient, auth_headers: dict[str, str], db_session
+) -> None:
+    bot = client.post(
+        "/api/v1/integrations/telegram/bots",
+        headers=auth_headers,
+        json={"name": "Agent trace", "token": "123456789:abcdefghijklmnopqrstuvwxyz", "allowlist": [42]},
+    ).json()
+    update = {
+        "update_id": 321,
+        "message": {"message_id": 1, "chat": {"id": 42}, "from": {"id": 42}, "text": "/start"},
+    }
+    response = client.post(
+        f"/api/v1/webhooks/telegram/{bot['id']}",
+        headers={"X-Telegram-Bot-Api-Secret-Token": bot["webhook_secret"]},
+        json=update,
+    )
+    assert response.status_code == 202, response.text
+    assert db_session.scalar(select(TelegramAgentSubscription)) is not None
+    task_id = _task(client, auth_headers)
+    client.post("/api/v1/agent-runs", headers=auth_headers, json={"task_id": task_id, "goal": "Проверить trace"})
+    texts = [message.payload["text"] for message in db_session.scalars(select(OutboxMessage))]
+    assert any("IT-отдел" in text for text in texts)
 
 
 def test_max_operations_bot_turns_a_free_text_goal_into_an_agent_run(

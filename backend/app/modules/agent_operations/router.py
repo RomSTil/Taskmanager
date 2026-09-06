@@ -397,6 +397,17 @@ def add_runner_event(
         run.status = AgentRunStatus.running
         if step:
             step.status = AgentRunStatus.running
+    if payload.event_type == "progress":
+        model = payload.payload.get("model")
+        effort = payload.payload.get("effort")
+        if isinstance(model, str) and model:
+            run.selected_model = model[:120]
+        if isinstance(effort, str) and effort:
+            run.selected_effort = effort[:24]
+        for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
+            value = payload.payload.get(field)
+            if isinstance(value, int) and value >= 0:
+                setattr(run, f"usage_{field}", max(getattr(run, f"usage_{field}"), value))
     elif payload.event_type == "role_started":
         run.status = AgentRunStatus.running
         if step:
@@ -422,6 +433,12 @@ def add_runner_event(
             run.lease_expires_at = None
         else:
             run.status = AgentRunStatus.internal_review
+    elif payload.event_type == "clarification_requested":
+        run.status = AgentRunStatus.waiting_owner_review
+        run.lease_expires_at = None
+        if step:
+            step.status = AgentRunStatus.waiting_owner_review
+            step.finished_at = datetime.now(UTC)
     elif payload.event_type == "blocked":
         run.status = AgentRunStatus.blocked
         run.lease_expires_at = None

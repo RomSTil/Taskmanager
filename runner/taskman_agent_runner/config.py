@@ -11,6 +11,7 @@ class RunnerConfig:
     workspace_path: str
     poll_seconds: float = 20.0
     codex_command: str = "codex"
+    codex_model: str = "gpt-6-astra"
 
 
 def config_path() -> Path:

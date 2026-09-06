@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html
 import json
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...config import Settings
-from ...models import Task, new_id
+from ...models import OutboxMessage, Task, TelegramAgentSubscription, new_id
 from ..event_bus.models import DomainEvent
 from ...security import hash_token
 from .models import (
@@ -70,12 +71,15 @@ class AgentOperationsService:
             payload = json.loads(encoded)
         except json.JSONDecodeError as exc:
             raise PermissionError("Malformed assignment payload") from exc
+        lease_expires_at = run.lease_expires_at
+        if lease_expires_at is not None and lease_expires_at.tzinfo is None:
+            lease_expires_at = lease_expires_at.replace(tzinfo=UTC)
         if (
             payload.get("run_id") != run.id
             or payload.get("runner_id") != runner.id
             or payload.get("role") != run.role.value
-            or run.lease_expires_at is None
-            or run.lease_expires_at < datetime.now(UTC)
+            or lease_expires_at is None
+            or lease_expires_at < datetime.now(UTC)
         ):
             raise PermissionError("Expired or mismatched assignment")
 
@@ -138,6 +142,7 @@ class AgentOperationsService:
             actor_id=actor_id,
         )
         session.add(event)
+        self._queue_telegram_trace(session, run, event_type, summary, payload or {})
         if event_type in {
             "run_queued",
             "approval_requested",
@@ -163,6 +168,61 @@ class AgentOperationsService:
                 )
             )
         return event
+
+    @staticmethod
+    def _queue_telegram_trace(
+        session: Session,
+        run: AgentRun,
+        event_type: str,
+        summary: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Send auditable milestones, never model-private reasoning or raw tool input."""
+        if event_type not in {
+            "run_queued", "run_claimed", "role_started", "role_completed",
+            "progress", "clarification_requested", "owner_answer", "approval_requested", "run_completed",
+            "run_cancelled", "runner_lease_expired", "failed", "blocked",
+        }:
+            return
+        subscriptions = list(
+            session.scalars(
+                select(TelegramAgentSubscription).where(TelegramAgentSubscription.enabled.is_(True))
+            )
+        )
+        if not subscriptions:
+            return
+        role_labels = {
+            "coordinator": "Координатор",
+            "market_researcher": "Исследователь рынка",
+            "researcher_developer": "Разработчик",
+            "tester": "Тестировщик",
+            "visual_reviewer": "UI-ревьюер",
+            "deploy": "Деплой-агент",
+        }
+        role = str(payload.get("role") or run.role.value)
+        model = str(payload.get("model") or run.selected_model or "по умолчанию")
+        usage = (
+            f"\nТокены: вход {run.usage_input_tokens:,} · "
+            f"выход {run.usage_output_tokens:,} · reasoning {run.usage_reasoning_tokens:,}"
+            if any((run.usage_input_tokens, run.usage_output_tokens, run.usage_reasoning_tokens))
+            else ""
+        )
+        title = "❓ Нужен ваш ответ" if event_type == "clarification_requested" else "🤖 IT-отдел"
+        text = (
+            f"<b>{title}</b>\n"
+            f"Задача: <code>{html.escape(run.id[:8])}</code>\n"
+            f"Роль: <b>{html.escape(role_labels.get(role, role))}</b>\n"
+            f"Модель: <code>{html.escape(model)}</code>\n"
+            f"{html.escape(summary[:2_000])}{usage}"
+        )
+        for subscription in subscriptions:
+            session.add(
+                OutboxMessage(
+                    bot_id=subscription.bot_id,
+                    chat_id=subscription.chat_id,
+                    payload={"chat_id": subscription.chat_id, "text": text, "parse_mode": "HTML"},
+                )
+            )
 
     def runner_from_token(self, session: Session, raw_token: str) -> AgentRunner:
         runner = session.scalar(

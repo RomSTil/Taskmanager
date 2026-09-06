@@ -34,7 +34,7 @@ class ApprovalDecision(ApiModel):
 
 class AgentEventCreate(ApiModel):
     event_type: Literal[
-        "progress", "role_started", "role_completed", "approval_requested", "blocked", "failed"
+        "progress", "role_started", "role_completed", "clarification_requested", "approval_requested", "blocked", "failed"
     ]
     summary: str = Field(default="", max_length=10_000)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -112,6 +112,9 @@ class AgentRunRead(ApiModel):
     mode: AgentMode
     selected_model: str | None
     selected_effort: str | None
+    usage_input_tokens: int
+    usage_output_tokens: int
+    usage_reasoning_tokens: int
     role: AgentRole
     runner_id: str | None
     approval_policy_id: str | None

@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import get_settings
 from ..database import get_session
 from ..dependencies import Principal, get_principal
-from ..models import BotConfig, ChecklistItem, Comment, OutboxMessage, Project, Task, TaskStatus, TelegramUpdate
+from ..models import BotConfig, ChecklistItem, Comment, OutboxMessage, Project, Task, TaskStatus, TelegramAgentSubscription, TelegramUpdate
+from ..modules.agent_operations.models import AgentEvent, AgentRole, AgentRun, AgentRunStatus, AgentRunStep
+from ..modules.agent_operations.service import AgentOperationsService
 from ..schemas import BotCreate, BotCreated, BotRead, BotUpdate
 from ..security import (
     constant_time_equal,
@@ -141,6 +143,98 @@ def _task_label(task: Task) -> str:
     return f"<b>{html.escape(task.identifier)}</b> {html.escape(task.title)}"
 
 
+def _subscribe_to_agent_trace(session: Session, bot: BotConfig, chat_id: int, user_id: int) -> None:
+    subscription = session.scalar(
+        select(TelegramAgentSubscription).where(
+            TelegramAgentSubscription.bot_id == bot.id,
+            TelegramAgentSubscription.chat_id == chat_id,
+        )
+    )
+    if subscription:
+        subscription.enabled = True
+        subscription.user_id = user_id
+        return
+    session.add(TelegramAgentSubscription(bot_id=bot.id, chat_id=chat_id, user_id=user_id))
+
+
+def _find_agent_run(session: Session, reference: str) -> AgentRun | None:
+    return session.scalar(
+        select(AgentRun)
+        .where(AgentRun.id.like(f"{reference.strip().lower()}%"))
+        .order_by(AgentRun.created_at.desc())
+    )
+
+
+def _agent_run_text(run: AgentRun) -> str:
+    role_labels = {
+        AgentRole.coordinator: "Координатор",
+        AgentRole.market_researcher: "Исследователь рынка",
+        AgentRole.researcher_developer: "Разработчик",
+        AgentRole.tester: "Тестировщик",
+        AgentRole.visual_reviewer: "UI-ревьюер",
+        AgentRole.deploy: "Деплой-агент",
+    }
+    status_labels = {
+        AgentRunStatus.queued: "в очереди",
+        AgentRunStatus.planning: "планирует",
+        AgentRunStatus.running: "работает",
+        AgentRunStatus.waiting_owner_review: "ждёт вас",
+        AgentRunStatus.waiting_approval: "ждёт разрешение",
+        AgentRunStatus.internal_review: "внутренняя проверка",
+        AgentRunStatus.revision: "доработка",
+        AgentRunStatus.completed: "готово",
+        AgentRunStatus.failed: "ошибка",
+        AgentRunStatus.blocked: "заблокировано",
+        AgentRunStatus.accepted: "принято",
+        AgentRunStatus.cancelled: "отменено",
+    }
+    lines = [
+        f"<b>🤖 Запуск {html.escape(run.id[:8])}</b>",
+        f"{html.escape(run.goal[:500])}",
+        f"Роль: <b>{role_labels[run.role]}</b> · Статус: <b>{status_labels[run.status]}</b>",
+        f"Модель: <code>{html.escape(run.selected_model or 'ожидается')}</code>",
+        f"Токены: вход {run.usage_input_tokens:,} · выход {run.usage_output_tokens:,} · reasoning {run.usage_reasoning_tokens:,}",
+    ]
+    return "\n".join(lines)
+
+
+def _agent_run_details(session: Session, run: AgentRun) -> str:
+    text = _agent_run_text(run)
+    events = list(
+        session.scalars(
+            select(AgentEvent).where(AgentEvent.run_id == run.id).order_by(AgentEvent.created_at.desc()).limit(12)
+        )
+    )
+    if events:
+        text += "\n\n<b>Последние действия</b>"
+        text += "".join(f"\n• {html.escape(event.summary[:500])}" for event in reversed(events))
+    return text
+
+
+def _answer_agent(session: Session, run: AgentRun, answer: str) -> bool:
+    if run.status != AgentRunStatus.waiting_owner_review:
+        return False
+    session.add(
+        AgentRunStep(
+            run_id=run.id,
+            role=run.role,
+            input_context={"owner_answer": answer[:10_000], "continuation": "Ответ владельца на вопрос агента"},
+        )
+    )
+    run.status = AgentRunStatus.queued
+    run.runner_id = None
+    run.lease_expires_at = None
+    AgentOperationsService(get_settings()).event(
+        session,
+        run,
+        "owner_answer",
+        "Владелец ответил на уточняющий вопрос; этап возвращён в очередь.",
+        payload={"role": run.role.value, "kind": "owner_answer"},
+        actor_type="owner",
+    )
+    return True
+
+
 def _create_ticket(session: Session, bot: BotConfig, chat_id: int, text: str, message: dict[str, Any]) -> Task:
     sequence = None
     if bot.project_id:
@@ -201,14 +295,41 @@ def _handle_message(session: Session, bot: BotConfig, message: dict[str, Any]) -
     command, _, argument = text.partition(" ")
     command = command.split("@")[0].lower()
     if command in {"/start", "/help"}:
+        _subscribe_to_agent_trace(session, bot, chat_id, user_id)
         _queue(
             session,
             bot,
             chat_id,
             "<b>Taskman</b>\nОбычный текст или /new — новый тикет.\n"
             "/tasks [status], /search текст, /status ID status, /priority ID 0-3, "
-            "/due ID YYYY-MM-DD, /project ID KEY, /comment ID текст",
+            "/due ID YYYY-MM-DD, /project ID KEY, /comment ID текст\n\n"
+            "<b>AI IT-отдел</b>\n/agents — активные запуски\n/agent ID — ход работы, модель и токены\n"
+            "/answer ID текст — ответить агенту на уточняющий вопрос\n"
+            "Этот чат подписан на безопасные этапы работы агентов.",
         )
+        return
+    if command == "/agents":
+        runs = list(
+            session.scalars(
+                select(AgentRun).order_by(AgentRun.created_at.desc()).limit(10)
+            )
+        )
+        _queue(session, bot, chat_id, "\n\n".join(_agent_run_text(run) for run in runs) or "Запусков пока нет.")
+        return
+    if command == "/agent":
+        run = _find_agent_run(session, argument)
+        _queue(session, bot, chat_id, _agent_run_details(session, run) if run else "Запуск не найден. Используйте первые 8 символов ID из /agents.")
+        return
+    if command == "/answer":
+        reference, _, answer = argument.partition(" ")
+        run = _find_agent_run(session, reference)
+        if not run or not answer.strip():
+            _queue(session, bot, chat_id, "Формат: /answer ID ваш ответ")
+            return
+        if _answer_agent(session, run, answer.strip()):
+            _queue(session, bot, chat_id, "Ответ передан. Агент продолжит работу после захвата Runner-ом.")
+        else:
+            _queue(session, bot, chat_id, "Этот запуск сейчас не ждёт уточнения.")
         return
     if command in {"/tasks", "/search"}:
         query = select(Task).options(selectinload(Task.project)).where(Task.archived_at.is_(None))

@@ -38,6 +38,16 @@ class RunnerTests(unittest.TestCase):
         assert report is not None
         self.assertNotIn("secret-value", report[1]["text"])
 
+    def test_market_researcher_is_required_for_non_code_research(self):
+        self.assertEqual(
+            LocalRunner._next_role({"role": "coordinator", "allowed_actions": ["research", "browser"]}),
+            "market_researcher",
+        )
+        self.assertEqual(
+            LocalRunner._next_role({"role": "market_researcher", "allowed_actions": ["research"]}),
+            "tester",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

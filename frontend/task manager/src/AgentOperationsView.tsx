@@ -9,12 +9,12 @@ const statusLabel: Record<AgentRunStatus, string> = {
 };
 
 const roleLabel = {
-  coordinator: "Координатор", researcher_developer: "Исследователь / разработчик", tester: "Тестировщик",
+  coordinator: "Координатор", market_researcher: "Исследователь рынка", researcher_developer: "Исследователь / разработчик", tester: "Тестировщик",
   visual_reviewer: "Визуальный ревьюер", deploy: "Деплой-агент",
 };
 
 const eventIcon: Record<string, string> = {
-  role: "👤", plan: "🗺", analysis: "🔎", action: "⚙", action_complete: "✓", mcp: "🔗", mcp_complete: "✓", report: "✦",
+  role: "👤", model: "🧠", usage: "◴", plan: "🗺", analysis: "🔎", action: "⚙", action_complete: "✓", mcp: "🔗", mcp_complete: "✓", report: "✦", question: "❓", owner_answer: "💬",
 };
 
 function eventRole(event: AgentEvent) {
@@ -75,6 +75,7 @@ export default function AgentOperationsView({ api }: { api: TaskmanApi }) {
     {selected && <article className="agent-run-detail">
       <div className="section-heading"><div><p className="eyebrow">{statusLabel[selected.status]}</p><h3>{selected.goal}</h3></div><button className="icon-button light" type="button" onClick={() => setSelected(null)}>×</button></div>
       <p className="agent-current-role">Сейчас: <strong>{roleLabel[selected.role]}</strong></p>
+      <div className="agent-telemetry"><div><span>Модель</span><strong>{selected.selected_model || "ожидается"}</strong></div><div><span>Режим</span><strong>{selected.selected_effort || "automatic"}</strong></div><div><span>Вход</span><strong>{selected.usage_input_tokens.toLocaleString("ru-RU")}</strong></div><div><span>Выход</span><strong>{selected.usage_output_tokens.toLocaleString("ru-RU")}</strong></div><div><span>Reasoning</span><strong>{selected.usage_reasoning_tokens.toLocaleString("ru-RU")}</strong></div></div>
       {selected.result_summary && <div className="agent-result"><strong>Результат</strong><p>{selected.result_summary}</p>{selected.preview_url && <a href={selected.preview_url} target="_blank" rel="noreferrer">Открыть preview</a>}</div>}
       {selected.error_message && <div className="error-message">{selected.error_message}</div>}
       {selected.approvals.filter((approval) => approval.status === "pending").map((approval) => <div className="agent-approval" key={approval.id}><strong>Нужно решение: {approval.action}</strong><p>{approval.explanation}</p><div><button className="secondary-button" type="button" onClick={() => void update(() => api.decideAgentApproval(selected.id, approval.id, "rejected"))}>Отклонить</button><button className="primary-button compact" type="button" onClick={() => void update(() => api.decideAgentApproval(selected.id, approval.id, "approved"))}>Разрешить</button></div></div>)}

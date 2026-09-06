@@ -327,3 +327,20 @@ class OutboxMessage(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TelegramAgentSubscription(Base):
+    """A private Telegram chat that opted in to safe agent progress updates."""
+
+    __tablename__ = "telegram_agent_subscriptions"
+    __table_args__ = (UniqueConstraint("bot_id", "chat_id", name="uq_telegram_agent_subscription"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    bot_id: Mapped[str] = mapped_column(ForeignKey("bot_configs.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
