@@ -48,6 +48,19 @@ class RunnerTests(unittest.TestCase):
             "tester",
         )
 
+    def test_model_is_routed_by_complexity_unless_owner_overrides(self):
+        automatic = LocalRunner(RunnerConfig("https://api.example", "runner", "C:\\workspace"), "runner-token")
+        self.assertEqual(
+            automatic._select_model({"mode": "auto", "allowed_actions": ["research", "browser"], "goal": "Найти поставщиков"})[0],
+            "gpt-5.6-sol",
+        )
+        self.assertEqual(
+            automatic._select_model({"mode": "maximum", "allowed_actions": [], "goal": "Проверить"})[0],
+            "gpt-6-astra",
+        )
+        forced = LocalRunner(RunnerConfig("https://api.example", "runner", "C:\\workspace", codex_model="gpt-6-astra"), "runner-token")
+        self.assertEqual(forced._select_model({"mode": "fast", "allowed_actions": [], "goal": "Проверить"})[0], "gpt-6-astra")
+
 
 if __name__ == "__main__":
     unittest.main()

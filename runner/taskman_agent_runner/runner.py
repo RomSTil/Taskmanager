@@ -77,17 +77,26 @@ class LocalRunner:
                 existing = self._worktree_path(run_id)
                 if existing.exists():
                     worktree = existing
+            model, complexity, reasons = self._select_model(run)
             self._progress(
                 run_id,
                 headers,
-                f"Выбрана модель {self.config.codex_model}.",
+                f"Оценка сложности: {complexity}. Причины: {', '.join(reasons)}.",
+                role=role,
+                kind="complexity",
+                complexity=complexity,
+            )
+            self._progress(
+                run_id,
+                headers,
+                f"Выбрана модель {model} для уровня «{complexity}».",
                 role=role,
                 kind="model",
-                model=self.config.codex_model,
-                effort="automatic",
+                model=model,
+                effort=str(run.get("mode") or "auto"),
             )
             self._progress(run_id, headers, "Агент формирует план текущего этапа.", role=role, kind="plan")
-            result, cancelled, clarification_requested = self._run_codex(run, worktree, headers)
+            result, cancelled, clarification_requested = self._run_codex(run, worktree, headers, model)
             if cancelled:
                 return
             if clarification_requested:
@@ -144,7 +153,11 @@ class LocalRunner:
                 self._remove_worktree(worktree)
 
     def _run_codex(
-        self, run: dict[str, Any], worktree: Path | None, assignment_token: str | None = None
+        self,
+        run: dict[str, Any],
+        worktree: Path | None,
+        assignment_token: str | None = None,
+        model: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], bool, bool]:
         role = str(run["role"])
         prompt = "\n\n".join(
@@ -163,7 +176,7 @@ class LocalRunner:
             "--approve-for-me",
             "--json",
             "--model",
-            self.config.codex_model,
+            model or self.config.codex_model,
             prompt,
         ]
         process = subprocess.Popen(
@@ -286,6 +299,48 @@ class LocalRunner:
     def _safe_text(value: str) -> str:
         compact = " ".join(value.split())
         return re.sub(r"(?i)(bearer\\s+|tm_|sk-|y0_)[A-Za-z0-9_-]{8,}", r"\\1[скрыто]", compact)
+
+    def _select_model(self, run: dict[str, Any]) -> tuple[str, str, list[str]]:
+        """Route by observable task complexity; an explicit config always wins."""
+        override = self.config.codex_model.strip()
+        if override and override.casefold() != "auto":
+            return override, "вручную задана", ["настройка владельца Runner"]
+
+        mode = str(run.get("mode") or "auto")
+        actions = {str(action) for action in run.get("allowed_actions", [])}
+        goal = str(run.get("goal") or "").casefold()
+        score = 0
+        reasons: list[str] = []
+        if mode == "fast":
+            return "gpt-5.6-luna", "простая", ["выбран быстрый режим"]
+        if mode == "maximum":
+            return "gpt-6-astra", "максимальная", ["владелец выбрал максимальный режим"]
+        if "code_preview" in actions:
+            score += 2
+            reasons.append("изменения кода")
+        if {"research", "browser"}.issubset(actions):
+            score += 3
+            reasons.append("исследование через браузер")
+        elif "research" in actions:
+            score += 1
+            reasons.append("поиск информации")
+        if len(goal) > 500:
+            score += 1
+            reasons.append("большое описание")
+        hard_topics = ("архитектур", "мультиагент", "безопасност", "миграц", "инфраструктур", "полностью")
+        if any(topic in goal for topic in hard_topics):
+            score += 2
+            reasons.append("сложная предметная область")
+        if mode == "analysis":
+            score += 1
+            reasons.append("аналитический режим")
+        if score >= 5:
+            return "gpt-6-astra", "сложная", reasons
+        if score >= 3:
+            return "gpt-5.6-sol", "обычная", reasons
+        if score >= 1:
+            return "gpt-5.6-terra", "средняя", reasons
+        return "gpt-5.6-luna", "простая", reasons or ["короткая задача без внешних инструментов"]
 
     def _create_worktree(self, run_id: str) -> Path:
         root = Path(self.config.workspace_path).resolve()

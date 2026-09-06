@@ -53,7 +53,7 @@ def main() -> None:
     register.add_argument("--workspace", required=True, help="Local Git repository for code tasks")
     register.add_argument("--poll-seconds", type=float, default=20.0)
     register.add_argument("--codex-command", default="codex")
-    register.add_argument("--codex-model", default="gpt-6-astra")
+    register.add_argument("--codex-model", default="auto")
     register.set_defaults(func=_register)
     run = subparsers.add_parser("run", help="Start the polling runner")
     run.set_defaults(func=_run)

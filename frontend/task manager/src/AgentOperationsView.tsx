@@ -14,7 +14,7 @@ const roleLabel = {
 };
 
 const eventIcon: Record<string, string> = {
-  role: "👤", model: "🧠", usage: "◴", plan: "🗺", analysis: "🔎", action: "⚙", action_complete: "✓", mcp: "🔗", mcp_complete: "✓", report: "✦", question: "❓", owner_answer: "💬",
+  role: "👤", complexity: "⚖", model: "🧠", usage: "◴", plan: "🗺", analysis: "🔎", action: "⚙", action_complete: "✓", mcp: "🔗", mcp_complete: "✓", report: "✦", question: "❓", owner_answer: "💬",
 };
 
 function eventRole(event: AgentEvent) {
