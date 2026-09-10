@@ -871,6 +871,30 @@ function WorkspaceApp() {
     }
   }
 
+  async function archiveNote(note: Note) {
+    if (!window.confirm(`Удалить заметку «${note.title}»? Она будет перемещена в корзину.`)) return;
+    setBusy(true);
+    setPageError("");
+    try {
+      await api.archiveNote(note);
+      setNotes((current) => current.filter((item) => item.id !== note.id));
+      setSelectedNote((current) => current?.id === note.id ? null : current);
+      setEditingNote((current) => current?.id === note.id ? null : current);
+      setNoteEditorOpen(false);
+      setShareDialogNote((current) => current?.id === note.id ? null : current);
+      setGraph((current) => current && {
+        nodes: current.nodes.filter((node) => node.id !== note.id),
+        edges: current.edges.filter((edge) => edge.source !== note.id && edge.target !== note.id),
+      });
+      setGraphNode((current) => current?.id === note.id ? null : current);
+      setGraphNote((current) => current?.id === note.id ? null : current);
+    } catch (reason) {
+      setPageError(reason instanceof Error ? reason.message : "Не удалось удалить заметку");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openTask(task: Task) {
     setSelectedTask(task);
     setTaskEditorTitle(task.title);
@@ -1387,7 +1411,7 @@ function WorkspaceApp() {
       {selectedNote && (
         <div className="modal-backdrop markdown-reader-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedNote(null); }}>
           <article className="markdown-reader" role="dialog" aria-modal="true" aria-label="Документ">
-            <header className="markdown-reader-header"><div><p className="eyebrow">ЗАМЕТКА</p><h1>{selectedNote.title}</h1></div><div className="reader-actions"><button className="icon-button light" type="button" onClick={() => openNoteEditor(selectedNote)} title="Редактировать заметку" aria-label="Редактировать заметку">✎</button><button className="icon-button light" type="button" onClick={() => void openShareDialog(selectedNote)} title="Публичный доступ" aria-label="Публичный доступ">↗</button><button className="icon-button light" type="button" onClick={() => setSelectedNote(null)}>×</button></div></header>
+            <header className="markdown-reader-header"><div><p className="eyebrow">ЗАМЕТКА</p><h1>{selectedNote.title}</h1></div><div className="reader-actions"><button className="icon-button light" type="button" onClick={() => openNoteEditor(selectedNote)} title="Редактировать заметку" aria-label="Редактировать заметку">✎</button><button className="icon-button light" type="button" onClick={() => void openShareDialog(selectedNote)} title="Публичный доступ" aria-label="Публичный доступ">↗</button><button className="icon-button light" type="button" onClick={() => void archiveNote(selectedNote)} title="Удалить заметку" aria-label="Удалить заметку" disabled={busy}>⌫</button><button className="icon-button light" type="button" onClick={() => setSelectedNote(null)}>×</button></div></header>
             {shareMessage && <p className="share-message">{shareMessage}{shareUrl && <> <a href={shareUrl} target="_blank" rel="noreferrer">Открыть ссылку</a></>}</p>}
             <div className="markdown-document"><MarkdownContent markdown={selectedNote.content_markdown} /></div>
           </article>

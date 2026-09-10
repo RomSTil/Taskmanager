@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import OutboxMessage
+from app.config import get_settings
 
 from app.routers.telegram import _message_kind, _steps_from_text
 
@@ -101,6 +102,32 @@ def test_note_move_does_not_overwrite_another_vault_file(
     unchanged = client.get(f"/api/v1/notes/{second['id']}", headers=auth_headers).json()
     assert "second" in unchanged["content_markdown"]
     assert "overwrite attempt" not in unchanged["content_markdown"]
+
+
+def test_note_deletion_moves_markdown_file_to_trash(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    created = client.post(
+        "/api/v1/notes",
+        headers=auth_headers,
+        json={"title": "Disposable", "path": "Inbox/Disposable.md", "content_markdown": "temporary"},
+    )
+    assert created.status_code == 201, created.text
+    note = created.json()
+    original = get_settings().vault_path / note["path"]
+    assert original.exists()
+
+    deleted = client.delete(
+        f"/api/v1/notes/{note['id']}",
+        headers=auth_headers,
+        params={"base_revision": note["revision"]},
+    )
+
+    assert deleted.status_code == 204, deleted.text
+    assert client.get("/api/v1/notes", headers=auth_headers).json() == []
+    assert client.get(f"/api/v1/notes/{note['id']}", headers=auth_headers).status_code == 404
+    assert not original.exists()
+    assert (get_settings().vault_path / ".taskman" / "trash" / f"{note['id']}-r2.md").exists()
 
 
 def test_telegram_webhook_allowlist_and_idempotency(

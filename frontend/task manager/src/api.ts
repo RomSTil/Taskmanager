@@ -307,6 +307,14 @@ export class TaskmanApi {
     );
   }
 
+  archiveNote(note: Note): Promise<void> {
+    return this.request<void>(
+      `/notes/${encodeURIComponent(note.id)}?base_revision=${encodeURIComponent(note.revision)}`,
+      { method: "DELETE" },
+      true,
+    );
+  }
+
   listTaskNotes(taskId: string): Promise<NoteIndex[]> {
     return this.request<NoteIndex[]>(`/tasks/${encodeURIComponent(taskId)}/notes`, {}, true);
   }
